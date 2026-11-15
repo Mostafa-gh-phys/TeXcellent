@@ -19,6 +19,23 @@ Open `http://localhost:3000`.
 
 ## Desktop Installers (`.AppImage`, `.exe`, `.dmg`)
 
-The GitHub Actions workflow at `.github/workflows/build-desktop.yml` automatically builds desktop installers for Linux (`AppImage`), Windows (`.exe` NSIS + portable), and macOS (`.dmg` + `.zip`) on every push to `main` or `v*` release tag.
+The repository includes a battle-tested multi-OS GitHub Actions workflow at [`.github/workflows/build-desktop.yml`](.github/workflows/build-desktop.yml) that packages standalone desktop installers:
+- **Linux**: Standalone `.AppImage` (x64) and portable `.tar.gz`
+- **Windows**: NSIS installation setup (`.exe`) and portable standalone (`.exe`)
+- **macOS**: Apple disk image (`.dmg`) and portable application archive (`.zip`) for both Apple Silicon (ARM64) and Intel (x64)
 
-You can also publish TeXcellent directly to a new or existing GitHub repository from **Sync → GitHub → Publish App + Workflows** inside the app.
+### Automated GitHub Builds & Releases
+1. **Push to `main`**: Automatically runs typechecks, unit tests, and compiles desktop installer artifacts uploaded directly to the Actions run summary.
+2. **Push a Release Tag** (e.g. `git tag v1.0.0 && git push origin v1.0.0`): Automatically creates a formal GitHub Release and attaches all cross-platform installers.
+3. **Manual Trigger (Actions Web UI)**: Navigate to **Actions → Build TeXcellent Desktop Installers → Run workflow**, where you can check **"Publish a GitHub Release"** to build and release installers immediately.
+
+### Building Desktop Locally
+```bash
+# 1. Build frontend and self-contained Express server
+npm run build
+npm run build:server
+
+# 2. Package for your current operating system
+npx electron-builder --config electron-builder.yml
+```
+Installers will be generated in the `release/` directory.

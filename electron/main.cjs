@@ -37,10 +37,23 @@ async function waitForServer(url, timeoutMs = 10000) {
 async function createWindow() {
   const port = await findFreePort(3000);
   process.env.PORT = String(port);
-  process.env.NODE_ENV = 'production';
-  process.env.TEXMATCH_DIST_DIR = path.join(__dirname, '..', 'dist');
+  const isPackaged = app.isPackaged;
+  const distDir = isPackaged && process.resourcesPath
+    ? path.join(process.resourcesPath, 'app.asar.unpacked', 'dist')
+    : path.join(__dirname, '..', 'dist');
 
-  require(path.join(__dirname, '..', 'dist-server', 'server.cjs'));
+  process.env.TEXCELLENT_DIST_DIR = distDir;
+  process.env.TEXMATCH_DIST_DIR = distDir;
+
+  const serverPath = isPackaged && process.resourcesPath
+    ? path.join(process.resourcesPath, 'app.asar.unpacked', 'dist-server', 'server.cjs')
+    : path.join(__dirname, '..', 'dist-server', 'server.cjs');
+
+  try {
+    require(serverPath);
+  } catch {
+    require(path.join(__dirname, '..', 'dist-server', 'server.cjs'));
+  }
 
   const baseUrl = `http://127.0.0.1:${port}`;
   await waitForServer(baseUrl);

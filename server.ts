@@ -1383,7 +1383,13 @@ async function startServer() {
 
   app.post('/api/github/publish-app', async (req, res) => {
     try {
-      const { token, sessionKey, repo, branch = 'main', commitMessage = 'Publish TeXcellent Studio & Desktop Build Workflows' } = req.body as {
+      const {
+        token,
+        sessionKey,
+        repo,
+        branch = 'main',
+        commitMessage = 'Publish TeXcellent Studio & Desktop Build Workflows',
+      } = req.body as {
         token?: string;
         sessionKey?: string;
         repo: string;
@@ -1396,7 +1402,16 @@ async function startServer() {
       }
 
       const rootDir = process.cwd();
-      const skipDirs = new Set(['node_modules', 'dist', 'dist-server', 'release', '.git', '.playwright-cli', '.aistudio', 'public/assets/aistudio']);
+      const skipDirs = new Set([
+        'node_modules',
+        'dist',
+        'dist-server',
+        'release',
+        '.git',
+        '.playwright-cli',
+        '.aistudio',
+        'public/assets/aistudio',
+      ]);
       const collected: Array<{ relPath: string; contentBase64: string }> = [];
 
       const walkDir = async (dir: string) => {
@@ -1406,6 +1421,7 @@ async function startServer() {
           const rel = path.relative(rootDir, full).replace(/\\/g, '/');
           if (skipDirs.has(entry.name) || skipDirs.has(rel)) continue;
           if (entry.name.startsWith('.env') && entry.name !== '.env.example') continue;
+          if (entry.name === '.DS_Store' || entry.name === 'Thumbs.db') continue;
           if (entry.isDirectory()) {
             await walkDir(full);
           } else if (entry.isFile()) {
@@ -1417,48 +1433,131 @@ async function startServer() {
 
       await walkDir(rootDir);
 
-      const syncedFiles: string[] = [];
-      for (const item of collected) {
-        const apiUrl = `https://api.github.com/repos/${repo}/contents/${encodeURIComponent(item.relPath).replace(/%2F/g, '/')}`;
-        let existingSha: string | undefined;
-        const headRes = await fetch(`${apiUrl}?ref=${encodeURIComponent(branch)}`, {
-          headers: { Authorization: `Bearer ${resolvedToken}`, 'User-Agent': 'TeXcellent' },
-        });
-        if (headRes.ok) {
-          const headJson = (await headRes.json()) as { sha?: string };
-          existingSha = headJson.sha;
+      const headers = {
+        Authorization: `Bearer ${resolvedToken}`,
+        'User-Agent': 'TeXcellent',
+        'Content-Type': 'application/json',
+      };
+
+      // 1. Fetch current branch ref to determine latest commit (if any)
+      let baseCommitSha: string | null = null;
+      let baseTreeSha: string | null = null;
+
+      const refRes = await fetch(`https://api.github.com/repos/${repo}/git/ref/heads/${encodeURIComponent(branch)}`, {
+        headers,
+      });
+
+      if (refRes.ok) {
+        const refJson = (await refRes.json()) as { object?: { sha?: string } };
+        baseCommitSha = refJson.object?.sha || null;
+        if (baseCommitSha) {
+          const commitRes = await fetch(`https://api.github.com/repos/${repo}/git/commits/${baseCommitSha}`, { headers });
+          if (commitRes.ok) {
+            const commitJson = (await commitRes.json()) as { tree?: { sha?: string } };
+            baseTreeSha = commitJson.tree?.sha || null;
+          }
         }
-        const putRes = await fetch(apiUrl, {
-          method: 'PUT',
-          headers: {
-            Authorization: `Bearer ${resolvedToken}`,
-            'User-Agent': 'TeXcellent',
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify({
-            message: `${commitMessage} (${item.relPath})`,
-            content: item.contentBase64,
-            branch,
-            ...(existingSha ? { sha: existingSha } : {}),
-          }),
+      }
+
+      // 2. Upload blobs for all collected files in parallel chunks
+      const treeEntries: Array<{ path: string; mode: string; type: string; sha: string }> = [];
+      const CHUNK_SIZE = 5;
+      for (let i = 0; i < collected.length; i += CHUNK_SIZE) {
+        const slice = collected.slice(i, i + CHUNK_SIZE);
+        const results = await Promise.all(
+          slice.map(async (item) => {
+            const blobRes = await fetch(`https://api.github.com/repos/${repo}/git/blobs`, {
+              method: 'POST',
+              headers,
+              body: JSON.stringify({
+                content: item.contentBase64,
+                encoding: 'base64',
+              }),
+            });
+            if (!blobRes.ok) {
+              const errTxt = await blobRes.text();
+              throw new Error(`Blob creation failed for ${item.relPath}: ${errTxt}`);
+            }
+            const blobJson = (await blobRes.json()) as { sha: string };
+            return {
+              path: item.relPath,
+              mode: '100644',
+              type: 'blob',
+              sha: blobJson.sha,
+            };
+          })
+        );
+        treeEntries.push(...results);
+      }
+
+      // 3. Create single atomic Git Tree
+      const treePayload = baseTreeSha
+        ? { base_tree: baseTreeSha, tree: treeEntries }
+        : { tree: treeEntries };
+      const treeRes = await fetch(`https://api.github.com/repos/${repo}/git/trees`, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify(treePayload),
+      });
+      if (!treeRes.ok) {
+        const errTxt = await treeRes.text();
+        throw new Error(`Tree creation failed: ${errTxt}`);
+      }
+      const treeJson = (await treeRes.json()) as { sha: string };
+      const newTreeSha = treeJson.sha;
+
+      // 4. Create ONE single atomic commit
+      const commitRes = await fetch(`https://api.github.com/repos/${repo}/git/commits`, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({
+          message: commitMessage,
+          tree: newTreeSha,
+          parents: baseCommitSha ? [baseCommitSha] : [],
+        }),
+      });
+      if (!commitRes.ok) {
+        const errTxt = await commitRes.text();
+        throw new Error(`Commit creation failed: ${errTxt}`);
+      }
+      const commitJson = (await commitRes.json()) as { sha: string };
+      const newCommitSha = commitJson.sha;
+
+      // 5. Update or create the branch ref
+      if (baseCommitSha) {
+        const patchRefRes = await fetch(`https://api.github.com/repos/${repo}/git/refs/heads/${encodeURIComponent(branch)}`, {
+          method: 'PATCH',
+          headers,
+          body: JSON.stringify({ sha: newCommitSha, force: true }),
         });
-        if (!putRes.ok) {
-          const errText = await putRes.text();
-          return res.status(putRes.status).json({ error: `Failed publishing ${item.relPath}: ${errText}` });
+        if (!patchRefRes.ok) {
+          const errTxt = await patchRefRes.text();
+          throw new Error(`Updating branch ${branch} failed: ${errTxt}`);
         }
-        syncedFiles.push(item.relPath);
+      } else {
+        const postRefRes = await fetch(`https://api.github.com/repos/${repo}/git/refs`, {
+          method: 'POST',
+          headers,
+          body: JSON.stringify({ ref: `refs/heads/${branch}`, sha: newCommitSha }),
+        });
+        if (!postRefRes.ok) {
+          const errTxt = await postRefRes.text();
+          throw new Error(`Creating branch ${branch} failed: ${errTxt}`);
+        }
       }
 
       res.json({
         success: true,
         repo,
         branch,
-        fileCount: syncedFiles.length,
+        commitSha: newCommitSha,
+        fileCount: collected.length,
         repoUrl: `https://github.com/${repo}`,
         actionsUrl: `https://github.com/${repo}/actions`,
         timestamp: new Date().toISOString(),
       });
     } catch (error) {
+      console.error('publish-app error:', error);
       res.status(500).json({ error: error instanceof Error ? error.message : 'App publish failed.' });
     }
   });
@@ -1638,9 +1737,11 @@ async function startServer() {
     });
     app.use(vite.middlewares);
   } else {
-    const distPath = process.env.TEXMATCH_DIST_DIR
-      ? path.resolve(process.env.TEXMATCH_DIST_DIR)
-      : path.resolve(process.cwd(), 'dist');
+    const distPath = process.env.TEXCELLENT_DIST_DIR
+      ? path.resolve(process.env.TEXCELLENT_DIST_DIR)
+      : process.env.TEXMATCH_DIST_DIR
+        ? path.resolve(process.env.TEXMATCH_DIST_DIR)
+        : path.resolve(process.cwd(), 'dist');
     app.use(express.static(distPath));
     app.get('*', (_req, res) => {
       res.sendFile(path.join(distPath, 'index.html'));

@@ -3,82 +3,63 @@ import React from 'react';
 interface TeXcellentLogoProps {
   accentColor?: string;
   textColor?: string;
+  height?: number;
   size?: number;
+  className?: string;
 }
 
 export const TeXcellentLogo: React.FC<TeXcellentLogoProps> = ({
   accentColor = '#0969da',
   textColor = 'currentColor',
-  size = 26,
+  height = 30,
+  size,
+  className = '',
 }) => {
+  const actualHeight = size || height;
+  const actualWidth = Math.round(actualHeight * (128 / 32));
+
   return (
     <svg
-      width={size}
-      height={size}
-      viewBox="0 0 36 32"
+      width={actualWidth}
+      height={actualHeight}
+      viewBox="0 0 128 32"
       fill="none"
       xmlns="http://www.w3.org/2000/svg"
-      aria-hidden="true"
-      className="shrink-0"
+      role="img"
+      aria-label="{TeXcellent}"
+      className={`shrink-0 select-none ${className}`}
     >
       <rect
         x="1.5"
         y="2"
-        width="33"
+        width="125"
         height="28"
-        rx="7"
+        rx="8"
         fill={accentColor}
-        fillOpacity="0.11"
+        fillOpacity="0.08"
         stroke={accentColor}
-        strokeWidth="1.65"
+        strokeWidth="1.25"
       />
-      {/* Left TeX curly brace */}
-      <path
-        d="M9.2 8.5C7.7 8.5 7.1 9.3 7.1 10.8V13.7C7.1 14.8 6.4 15.6 5.5 16C6.4 16.4 7.1 17.2 7.1 18.3V21.2C7.1 22.7 7.7 23.5 9.2 23.5"
-        stroke={textColor}
-        strokeWidth="1.75"
-        strokeLinecap="round"
-        strokeLinejoin="round"
-      />
-      {/* Right TeX curly brace */}
-      <path
-        d="M26.8 8.5C28.3 8.5 28.9 9.3 28.9 10.8V13.7C28.9 14.8 29.6 15.6 30.5 16C29.6 16.4 28.9 17.2 28.9 18.3V21.2C28.9 22.7 28.3 23.5 26.8 23.5"
-        stroke={textColor}
-        strokeWidth="1.75"
-        strokeLinecap="round"
-        strokeLinejoin="round"
-      />
-      {/* Classic lowered-E TeX monogram inside braces (replacing dagger motif) */}
       <text
-        x="11.2"
-        y="19.5"
-        fill={accentColor}
-        fontSize="10.5"
-        fontWeight="800"
-        fontFamily="Georgia, 'Times New Roman', serif"
-        letterSpacing="-0.5"
+        x="64"
+        y="20.5"
+        textAnchor="middle"
+        fontFamily="ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif"
+        fontSize="14.5"
+        letterSpacing="0.25px"
       >
-        T
-      </text>
-      <text
-        x="16.1"
-        y="21.4"
-        fill={textColor}
-        fontSize="9.8"
-        fontWeight="700"
-        fontFamily="Georgia, 'Times New Roman', serif"
-      >
-        E
-      </text>
-      <text
-        x="20.7"
-        y="19.5"
-        fill={accentColor}
-        fontSize="10.5"
-        fontWeight="800"
-        fontFamily="Georgia, 'Times New Roman', serif"
-      >
-        X
+        <tspan fill={accentColor} fontWeight="700" opacity="0.9">
+          {'{'}
+        </tspan>
+        <tspan fill={accentColor} fontWeight="800">
+          TeX
+        </tspan>
+        <tspan fill={textColor} fontWeight="600">
+          cellent
+        </tspan>
+        <tspan fill={accentColor} fontWeight="700" opacity="0.9">
+          {'}'}
+        </tspan>
       </text>
     </svg>
   );

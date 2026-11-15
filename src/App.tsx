@@ -564,15 +564,14 @@ Write your document here.
         <a
           href="/"
           onClick={(e) => e.preventDefault()}
-          className="inline-flex items-center gap-2 text-lg font-bold tracking-tight whitespace-nowrap shrink-0 md:justify-self-center"
-          style={{ color: theme.ui.text }}
+          aria-label="TeXcellent"
+          className="inline-flex items-center justify-center whitespace-nowrap shrink-0 md:justify-self-center hover:opacity-90 transition-opacity"
         >
           <TeXcellentLogo
             accentColor={theme.ui.accent}
             textColor={theme.ui.text}
-            size={26}
+            height={30}
           />
-          <span>TeXcellent</span>
         </a>
 
         <div className="flex items-center justify-self-end shrink-0">

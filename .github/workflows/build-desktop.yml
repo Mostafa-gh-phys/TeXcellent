@@ -10,6 +10,17 @@ on:
     branches:
       - main
   workflow_dispatch:
+    inputs:
+      create_release:
+        description: 'Publish a GitHub Release with installer assets'
+        required: false
+        type: boolean
+        default: false
+      release_tag:
+        description: 'Tag name for manual release (e.g. v1.0.0)'
+        required: false
+        type: string
+        default: 'v1.0.0'
 
 permissions:
   contents: write
@@ -26,16 +37,15 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: 22
-          cache: npm
 
       - name: Install dependencies
-        run: npm ci
+        run: npm install --legacy-peer-deps
 
       - name: Run TypeScript check
         run: npm run lint
 
       - name: Run unit tests
-        run: npx tsx --test src/utils/*.test.ts
+        run: npm test
 
   build-desktop:
     name: Build Desktop (${{ matrix.os }})
@@ -63,23 +73,30 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: 22
-          cache: npm
 
-      - name: Install dependencies
-        run: npm ci
+      - name: Install Linux AppImage build dependencies (FUSE)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libfuse2t64 || sudo apt-get install -y libfuse2 || true
+
+      - name: Install project dependencies
+        run: npm install --legacy-peer-deps
 
       - name: Build frontend assets
         run: npm run build
 
       - name: Bundle Express backend for Electron
-        run: npx esbuild server.ts --bundle --platform=node --format=cjs --outfile=dist-server/server.cjs --packages=external --external:vite
+        run: npm run build:server
 
       - name: Install Electron & electron-builder
-        run: npm install --no-save electron electron-builder
+        run: npm install --no-save electron@34.3.0 electron-builder@25.1.8 --legacy-peer-deps
 
       - name: Package installer (${{ matrix.platform_flag }})
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          CSC_IDENTITY_AUTO_DISCOVERY: false
+          ELECTRON_BUILDER_ALLOW_UNRESOLVED_DEPENDENCIES: true
         run: npx electron-builder --config electron-builder.yml ${{ matrix.platform_flag }} --publish never
 
       - name: Upload installer artifacts
@@ -91,12 +108,13 @@ jobs:
             release/*.exe
             release/*.dmg
             release/*.zip
+            release/*.tar.gz
           if-no-files-found: warn
 
   publish-release:
     name: Create GitHub Release
     needs: build-desktop
-    if: startsWith(github.ref, 'refs/tags/v')
+    if: startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && inputs.create_release)
     runs-on: ubuntu-latest
     steps:
       - name: Download all built installers
@@ -107,10 +125,14 @@ jobs:
 
       - name: Publish Release Assets
         uses: softprops/action-gh-release@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
+          tag_name: ${{ inputs.release_tag || github.ref_name }}
           files: |
             artifacts/*.AppImage
             artifacts/*.exe
             artifacts/*.dmg
             artifacts/*.zip
+            artifacts/*.tar.gz
           generate_release_notes: true
