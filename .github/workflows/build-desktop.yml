@@ -56,7 +56,7 @@ jobs:
         include:
           - os: ubuntu-latest
             artifact_pattern: 'release/*.AppImage'
-            platform_flag: '--linux'
+            platform_flag: '--linux AppImage'
           - os: windows-latest
             artifact_pattern: 'release/*.exe'
             platform_flag: '--win'

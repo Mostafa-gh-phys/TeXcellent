@@ -24,9 +24,6 @@ linux:
     - target: AppImage
       arch:
         - x64
-    - target: tar.gz
-      arch:
-        - x64
   category: Office
   synopsis: Bilingual LaTeX Studio with TeX Live & MiKTeX autodetection
 win:
