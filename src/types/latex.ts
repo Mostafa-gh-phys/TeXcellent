@@ -1,0 +1,112 @@
+export type CompilerMode = 'xelatex' | 'pdflatex' | 'lualatex' | 'latex' | 'latexmk';
+
+export type TexDistribution =
+  | 'texlive-2025'
+  | 'texlive-2024'
+  | 'miktex-24'
+  | 'miktex-portable';
+
+export type TexEdition = 'full' | 'medium' | 'basic';
+
+export type ThemeId =
+  | 'github-light'
+  | 'github-dark'
+  | 'mathematica'
+  | 'nord'
+  | 'solarized-light'
+  | 'tokyo-night'
+  | 'monokai';
+
+export type DirectionMode = 'auto' | 'ltr' | 'rtl';
+
+export type PreviewMode = 'beside' | 'external' | 'editor-only';
+
+export type EditorFontId =
+  | 'jetbrains'
+  | 'ibm-plex'
+  | 'fira-code'
+  | 'source-code'
+  | 'vazirmatn'
+  | 'system-mono';
+
+export interface ProjectFile {
+  id: string;
+  name: string;
+  content: string;
+  language: 'latex' | 'bibtex' | 'style';
+  updatedAt: string;
+}
+
+export interface LatexProject {
+  id: string;
+  name: string;
+  mainFileId: string;
+  files: ProjectFile[];
+  compilerMode: CompilerMode;
+  distribution: TexDistribution;
+  edition: TexEdition;
+  updatedAt: string;
+}
+
+export interface CompileLogEntry {
+  level: 'info' | 'warning' | 'error';
+  line?: number;
+  file?: string;
+  message: string;
+}
+
+export interface CompileResult {
+  success: boolean;
+  compileId: string;
+  pdfUrl: string;
+  durationMs: number;
+  pageCount: number;
+  engineLabel: string;
+  distributionLabel: string;
+  backendType: 'native-binary' | 'remote-endpoint' | 'built-in-typesetter';
+  rawLog: string;
+  diagnostics: CompileLogEntry[];
+  timestamp: string;
+}
+
+export interface CompilerSettings {
+  distribution: TexDistribution;
+  edition: TexEdition;
+  compilerMode: CompilerMode;
+  customBinaryPath: string;
+  remoteEndpointUrl: string;
+  shellEscape: boolean;
+  synctex: boolean;
+}
+
+export interface DetectedTexInstallation {
+  hasNative: boolean;
+  detectedDistribution: TexDistribution | null;
+  detectedBinDir: string | null;
+  versionBanner: string | null;
+  binaries: Record<string, { path: string; version: string; distribution: string } | null>;
+}
+
+export interface SyncConfig {
+  github: {
+    connected: boolean;
+    username: string;
+    token: string;
+    repo: string;
+    branch: string;
+    basePath: string;
+    lastSyncedAt?: string;
+  };
+  overleaf: {
+    projectId: string;
+    gitToken: string;
+    customHost: string;
+    lastSyncedAt?: string;
+  };
+  easytex: {
+    projectUrl: string;
+    apiToken: string;
+    instanceUrl: string;
+    lastSyncedAt?: string;
+  };
+}

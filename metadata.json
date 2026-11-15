@@ -1,0 +1,6 @@
+{
+  "name": "TeXMatch",
+  "description": "Minimal bidirectional LaTeX studio with TeX Live & MiKTeX autodetection, editor themes & fonts, AI image-to-LaTeX, package autocomplete, and GitHub, Overleaf & easytex.ir sync.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

@@ -1,0 +1,45 @@
+appId: com.texcellent.studio
+productName: TeXcellent
+copyright: Copyright © 2026 TeXcellent Contributors
+extraMetadata:
+  name: texcellent
+  main: electron/main.cjs
+directories:
+  output: release
+files:
+  - dist/**/*
+  - dist-server/**/*
+  - electron/**/*
+  - package.json
+asar: true
+asarUnpack:
+  - dist-server/**/*
+linux:
+  target:
+    - target: AppImage
+      arch:
+        - x64
+  category: Office
+  synopsis: Bilingual LaTeX Studio with TeX Live & MiKTeX autodetection
+win:
+  target:
+    - target: nsis
+      arch:
+        - x64
+    - target: portable
+      arch:
+        - x64
+nsis:
+  oneClick: false
+  allowToChangeInstallationDirectory: true
+mac:
+  target:
+    - target: dmg
+      arch:
+        - x64
+        - arm64
+    - target: zip
+      arch:
+        - x64
+        - arm64
+  category: public.app-category.productivity
