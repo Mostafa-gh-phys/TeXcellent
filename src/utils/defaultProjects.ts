@@ -30,8 +30,23 @@ export const PROJECT_TEMPLATES: ProjectTemplate[] = [
 \\usepackage{hyperref}
 \\usepackage{xepersian}
 
-\\settextfont{Vazirmatn}
-\\setlatintextfont{Source Serif 4}
+% Safe cross-platform font selection with automatic fallback
+\\IfFontExistsTF{Vazirmatn}{\\settextfont{Vazirmatn}}{%
+  \\IfFontExistsTF{XB Niloofar}{\\settextfont{XB Niloofar}}{%
+    \\IfFontExistsTF{IRLotus}{\\settextfont{IRLotus}}{%
+      \\IfFontExistsTF{Noto Naskh Arabic}{\\settextfont{Noto Naskh Arabic}}{%
+        \\IfFontExistsTF{Amiri}{\\settextfont{Amiri}}{%
+          \\IfFontExistsTF{Tahoma}{\\settextfont{Tahoma}}{\\settextfont{DejaVu Sans}}%
+        }%
+      }%
+    }%
+  }%
+}
+\\IfFontExistsTF{Source Serif 4}{\\setlatintextfont{Source Serif 4}}{%
+  \\IfFontExistsTF{Latin Modern Roman}{\\setlatintextfont{Latin Modern Roman}}{%
+    \\setlatintextfont{DejaVu Serif}%
+  }%
+}
 
 \\title{یادداشت‌های آنالیز ریاضی و فضاهای هیلبرت}
 \\author{گروه ریاضی کاربردی}
@@ -229,4 +244,38 @@ export function createInitialProject(): LatexProject {
     ...tpl,
     updatedAt: new Date().toISOString(),
   };
+}
+
+const LEGACY_BROKEN_FONTS = `\\settextfont{Vazirmatn}\n\\setlatintextfont{Source Serif 4}`;
+const SAFE_FONT_BLOCK = `% Safe cross-platform font selection with automatic fallback
+\\IfFontExistsTF{Vazirmatn}{\\settextfont{Vazirmatn}}{%
+  \\IfFontExistsTF{XB Niloofar}{\\settextfont{XB Niloofar}}{%
+    \\IfFontExistsTF{IRLotus}{\\settextfont{IRLotus}}{%
+      \\IfFontExistsTF{Noto Naskh Arabic}{\\settextfont{Noto Naskh Arabic}}{%
+        \\IfFontExistsTF{Amiri}{\\settextfont{Amiri}}{%
+          \\IfFontExistsTF{Tahoma}{\\settextfont{Tahoma}}{\\settextfont{DejaVu Sans}}%
+        }%
+      }%
+    }%
+  }%
+}
+\\IfFontExistsTF{Source Serif 4}{\\setlatintextfont{Source Serif 4}}{%
+  \\IfFontExistsTF{Latin Modern Roman}{\\setlatintextfont{Latin Modern Roman}}{%
+    \\setlatintextfont{DejaVu Serif}%
+  }%
+}`;
+
+export function migrateLegacyDefaultProject(project: LatexProject): LatexProject {
+  let changed = false;
+  const nextFiles = project.files.map((file) => {
+    if (file.name.endsWith('.tex') && file.content.includes(LEGACY_BROKEN_FONTS)) {
+      changed = true;
+      return {
+        ...file,
+        content: file.content.replace(LEGACY_BROKEN_FONTS, SAFE_FONT_BLOCK),
+      };
+    }
+    return file;
+  });
+  return changed ? { ...project, files: nextFiles } : project;
 }

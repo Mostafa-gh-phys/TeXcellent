@@ -93,7 +93,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                     type="button"
                     onClick={() => onChangeTheme(item.id)}
                     aria-pressed={selected}
-                    className="text-left p-3 rounded-lg border transition-colors flex items-start justify-between gap-3"
+                    className="text-left p-3 rounded-lg border flex items-start justify-between gap-3"
                     style={{
                       backgroundColor: selected ? theme.ui.surfaceAlt : theme.ui.surface,
                       borderColor: selected ? theme.ui.accent : theme.ui.border,

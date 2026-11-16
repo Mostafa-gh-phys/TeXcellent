@@ -546,8 +546,8 @@ export function parseLatexDocument(source: string): ParsedLatexDocument {
 export function validateLatexBuild(
   source: string,
   mode: CompilerMode,
-  distribution: TexDistribution,
-  edition: TexEdition
+  distribution?: TexDistribution,
+  edition?: TexEdition
 ): CompileLogEntry[] {
   const diagnostics: CompileLogEntry[] = [];
   const parsed = parseLatexDocument(source);
@@ -591,8 +591,8 @@ export function validateLatexBuild(
     });
   }
 
-  // 3. Edition package checks (TeX Live / MiKTeX Basic vs Medium vs Full)
-  if (edition === 'basic') {
+  // 3. Edition package checks when explicitly passed
+  if (edition === 'basic' && distribution) {
     for (const pkg of parsed.packages) {
       if (!BASIC_EDITION_PACKAGES.has(pkg)) {
         diagnostics.push({
@@ -662,7 +662,7 @@ export function validateLatexBuild(
   if (diagnostics.length === 0) {
     diagnostics.push({
       level: 'info',
-      message: `Compiled cleanly with 0 errors (${mode.toUpperCase()} · ${distribution} · ${edition}).`,
+      message: `Compiled cleanly with 0 errors (${mode.toUpperCase()}).`,
     });
   }
 

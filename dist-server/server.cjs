@@ -129523,7 +129523,7 @@ function validateLatexBuild(source, mode, distribution, edition) {
       message: "xepersian is officially designed for XeLaTeX; consider switching mode to XeLaTeX for full Kashida & bidi support."
     });
   }
-  if (edition === "basic") {
+  if (edition === "basic" && distribution) {
     for (const pkg of parsed.packages) {
       if (!BASIC_EDITION_PACKAGES.has(pkg)) {
         diagnostics.push({
@@ -129588,7 +129588,7 @@ function validateLatexBuild(source, mode, distribution, edition) {
   if (diagnostics.length === 0) {
     diagnostics.push({
       level: "info",
-      message: `Compiled cleanly with 0 errors (${mode.toUpperCase()} \xB7 ${distribution} \xB7 ${edition}).`
+      message: `Compiled cleanly with 0 errors (${mode.toUpperCase()}).`
     });
   }
   return diagnostics;
@@ -129835,6 +129835,100 @@ function latexMathToUnicode(math) {
   return out;
 }
 
+// src/utils/compilerArgs.ts
+var DEFAULT_COMPILER_SETTINGS = {
+  compilerMode: "xelatex",
+  customBinaryPath: "",
+  remoteEndpointUrl: "",
+  shellEscape: false,
+  synctex: true,
+  interactionMode: "nonstopmode",
+  compilePasses: "auto",
+  bibliographyTool: "auto",
+  outputFormat: "pdf",
+  fileLineError: true,
+  haltOnError: true,
+  extraArgs: "",
+  distribution: "texlive-2025",
+  edition: "full"
+};
+function mergeCompilerSettings(partial) {
+  return {
+    ...DEFAULT_COMPILER_SETTINGS,
+    ...partial || {}
+  };
+}
+function sanitizeRelativeTeXPath(rawPath) {
+  return rawPath.replace(/\\/g, "/").split("/").map((s2) => s2.trim()).filter((s2) => Boolean(s2) && s2 !== "." && s2 !== "..").join("/") || "main.tex";
+}
+var ALLOWED_EXTRA_ARG_RE = /^-[a-zA-Z0-9][a-zA-Z0-9=_-]*$/;
+function parseExtraCliArgs(rawExtraArgs) {
+  if (!rawExtraArgs?.trim()) return [];
+  return rawExtraArgs.trim().split(/\s+/).filter((token) => ALLOWED_EXTRA_ARG_RE.test(token));
+}
+function buildCompilerCliArgs(mode, mainFileName, settings = {}) {
+  const cfg = mergeCompilerSettings(settings);
+  const safeMain = sanitizeRelativeTeXPath(mainFileName);
+  if (mode === "latexmk") {
+    const args2 = ["-pdf", `-interaction=${cfg.interactionMode}`];
+    if (cfg.compilerMode === "xelatex" || cfg.extraArgs.includes("xelatex")) {
+    }
+    if (cfg.fileLineError) args2.push("-file-line-error");
+    if (cfg.haltOnError) args2.push("-halt-on-error");
+    if (cfg.synctex) args2.push("-synctex=1");
+    if (cfg.shellEscape) args2.push("-shell-escape");
+    args2.push(...parseExtraCliArgs(cfg.extraArgs));
+    args2.push(safeMain);
+    return args2;
+  }
+  const args = [`-interaction=${cfg.interactionMode}`];
+  if (cfg.fileLineError) args.push("-file-line-error");
+  if (cfg.haltOnError) args.push("-halt-on-error");
+  if (cfg.synctex) args.push("-synctex=1");
+  if (cfg.shellEscape) args.push("-shell-escape");
+  if (cfg.outputFormat === "dvi") {
+    if (mode === "pdflatex" || mode === "lualatex") {
+      args.push("-output-format=dvi");
+    } else if (mode === "xelatex") {
+      args.push("-no-pdf");
+    }
+  } else if (cfg.outputFormat === "draft") {
+    if (mode === "pdflatex" || mode === "lualatex") {
+      args.push("-draftmode");
+    } else if (mode === "xelatex") {
+      args.push("-no-pdf");
+    }
+  }
+  args.push(...parseExtraCliArgs(cfg.extraArgs));
+  args.push(safeMain);
+  return args;
+}
+function resolveBibliographyTool(source, files, preferred = "auto") {
+  if (preferred === "none" || preferred === "bibtex" || preferred === "biber") {
+    return preferred;
+  }
+  const hasBibFile = files.some((f3) => f3.name.toLowerCase().endsWith(".bib"));
+  const hasBiblatex = /\\usepackage(?:\[[^\]]*\])?\{[^}]*biblatex[^}]*\}/i.test(source);
+  const hasBibtexCmd = /\\bibliography\{|\\addbibresource\{|\\cite\{/i.test(source);
+  if (!hasBibFile && !hasBibtexCmd && !hasBiblatex) return "none";
+  if (hasBiblatex || /\\addbibresource\{/i.test(source)) return "biber";
+  if (/\\bibliography\{/i.test(source) && hasBibFile) return "bibtex";
+  return "none";
+}
+function resolvePassCount(source, settings = {}, bibTool = "none") {
+  const cfg = mergeCompilerSettings(settings);
+  if (cfg.compilerMode === "latexmk" || cfg.compilePasses === "1") {
+    return 1;
+  }
+  if (cfg.compilePasses === "2") return 2;
+  if (cfg.compilePasses === "3") return 3;
+  if (bibTool !== "none") return 3;
+  if (/\\tableofcontents\b|\\ref\{|\\pageref\{|\\eqref\{|\\listoffigures\b/i.test(source)) {
+    return 2;
+  }
+  return 1;
+}
+
 // server.ts
 var execFileAsync = (0, import_node_util4.promisify)(import_node_child_process.execFile);
 var PORT = Number(process.env.PORT) || 3e3;
@@ -129879,22 +129973,27 @@ async function collectStandardTexSearchDirs(customDir) {
   const isMac = process.platform === "darwin";
   if (isWin) {
     const localAppData = process.env.LOCALAPPDATA || import_node_path2.default.join(home, "AppData", "Local");
+    const appData = process.env.APPDATA || import_node_path2.default.join(home, "AppData", "Roaming");
     const programFiles = process.env.ProgramFiles || "C:\\Program Files";
     for (const yr of ["2026", "2025", "2024", "2023", "2022", "2021", "2020"]) {
       dirs.add(`C:\\texlive\\${yr}\\bin\\windows`);
       dirs.add(`C:\\texlive\\${yr}\\bin\\win32`);
     }
+    dirs.add(import_node_path2.default.join(appData, "TinyTeX", "bin", "windows"));
     dirs.add(import_node_path2.default.join(programFiles, "MiKTeX", "miktex", "bin", "x64"));
     dirs.add(import_node_path2.default.join(localAppData, "Programs", "MiKTeX", "miktex", "bin", "x64"));
     dirs.add("C:\\miktex-portable\\texmfs\\install\\miktex\\bin\\x64");
   } else {
     if (isMac) {
       dirs.add("/Library/TeX/texbin");
+      dirs.add(import_node_path2.default.join(home, "Library", "TinyTeX", "bin", "universal-darwin"));
       dirs.add("/opt/homebrew/bin");
       dirs.add("/usr/local/bin");
     } else {
       dirs.add("/usr/bin");
       dirs.add("/usr/local/bin");
+      dirs.add(import_node_path2.default.join(home, ".TinyTeX", "bin", "x86_64-linux"));
+      dirs.add(import_node_path2.default.join(home, ".TinyTeX", "bin", "aarch64-linux"));
     }
     dirs.add(import_node_path2.default.join(home, "bin"));
     dirs.add(import_node_path2.default.join(home, ".miktex", "texmfs", "install", "miktex", "bin", "x64"));
@@ -129912,6 +130011,15 @@ async function collectStandardTexSearchDirs(customDir) {
   }
   return Array.from(dirs);
 }
+function buildTexChildEnv(extraDirs) {
+  const valid = extraDirs.map((d) => d?.trim()).filter((d) => Boolean(d));
+  const sep = import_node_path2.default.delimiter;
+  const currentPath = process.env.PATH || "";
+  return {
+    ...process.env,
+    PATH: valid.length > 0 ? `${valid.join(sep)}${sep}${currentPath}` : currentPath
+  };
+}
 function classifyDistributionFromBanner(banner, binPath) {
   const lower2 = `${banner} ${binPath}`.toLowerCase();
   if (lower2.includes("miktex")) {
@@ -129925,9 +130033,19 @@ function classifyDistributionFromBanner(banner, binPath) {
   }
   return null;
 }
+function classifyFamilyFromBanner(banner, binPath) {
+  const lower2 = `${banner} ${binPath}`.toLowerCase();
+  if (lower2.includes("miktex")) return "MiKTeX";
+  if (lower2.includes("tinytex")) return "TinyTeX";
+  if (lower2.includes("texlive") || lower2.includes("tex live")) return "TeX Live";
+  return "TeX";
+}
 async function inspectTexBinary(binPath) {
   try {
-    const { stdout } = await execFileAsync(binPath, ["--version"], { timeout: 1500 });
+    const { stdout } = await execFileAsync(binPath, ["--version"], {
+      timeout: 2500,
+      env: buildTexChildEnv([import_node_path2.default.dirname(binPath)])
+    });
     const firstLine = stdout.split(/\r?\n/).find((l) => l.trim().length > 0)?.trim() || "Installed";
     const dist = classifyDistributionFromBanner(firstLine, binPath) || "texlive-2025";
     return { version: firstLine, distribution: dist };
@@ -129936,15 +130054,18 @@ async function inspectTexBinary(binPath) {
   }
 }
 async function detectLocalTexInstallation(customDir) {
-  const candidates = ["xelatex", "pdflatex", "lualatex", "latex", "latexmk"];
+  const engineCandidates = ["xelatex", "pdflatex", "lualatex", "latex", "latexmk"];
+  const auxCandidates = ["bibtex", "biber", "kpsewhich", "dvipdfmx"];
+  const allCandidates = [...engineCandidates, ...auxCandidates];
   const binaries = {};
   const searchDirs = await collectStandardTexSearchDirs(customDir);
   const lookupCmd = process.platform === "win32" ? "where" : "which";
   const ext = process.platform === "win32" ? ".exe" : "";
   let detectedBinDir = null;
   let detectedDistribution = null;
+  let detectedFamily = null;
   let versionBanner = null;
-  for (const cmd of candidates) {
+  for (const cmd of allCandidates) {
     let foundPath = null;
     for (const dir of searchDirs) {
       const candidatePath = import_node_path2.default.join(dir, `${cmd}${ext}`);
@@ -129971,19 +130092,25 @@ async function detectLocalTexInstallation(customDir) {
         version: info.version,
         distribution: info.distribution
       };
-      if (!detectedBinDir) detectedBinDir = import_node_path2.default.dirname(foundPath);
-      if (!versionBanner) versionBanner = info.version;
-      if (!detectedDistribution) {
-        detectedDistribution = classifyDistributionFromBanner(info.version, foundPath);
+      if (engineCandidates.includes(cmd)) {
+        if (!detectedBinDir) detectedBinDir = import_node_path2.default.dirname(foundPath);
+        if (!versionBanner) versionBanner = info.version;
+        if (!detectedDistribution) {
+          detectedDistribution = classifyDistributionFromBanner(info.version, foundPath);
+        }
+        if (!detectedFamily) {
+          detectedFamily = classifyFamilyFromBanner(info.version, foundPath);
+        }
       }
     } else {
       binaries[cmd] = null;
     }
   }
-  const hasNative = Object.values(binaries).some(Boolean);
+  const hasNative = engineCandidates.some((cmd) => Boolean(binaries[cmd]));
   return {
     hasNative,
     detectedDistribution,
+    detectedFamily,
     detectedBinDir,
     versionBanner,
     binaries
@@ -130271,12 +130398,11 @@ async function buildPdfBinaryFromLatex(source, meta) {
     pageCount: pdfDoc.getPageCount()
   };
 }
-function formatTexEngineLog(distribution, edition, mode, mainFileName, packages, diagnostics, pageCount, durationMs) {
-  const distTitle = distribution === "texlive-2025" ? "This is XeTeX/TeX Live 2025 (TeX Live 2025/Debian)" : distribution === "texlive-2024" ? "This is TeX Live 2024 (LTS)" : distribution === "miktex-24" ? "This is MiKTeX 24.1 (Windows/Linux Console)" : "This is MiKTeX 24.1 Portable";
+function formatTexEngineLog(_distribution, _edition, mode, mainFileName, packages, diagnostics, pageCount, durationMs) {
   const lines = [
-    `${distTitle} \u2014 Edition: ${edition.toUpperCase()} \u2014 Mode: ${mode.toUpperCase()}`,
+    `TeXcellent Built-in Typesetter \u2014 Engine: ${mode.toUpperCase()}`,
     `entering extended mode (./${mainFileName})`,
-    `LaTeX2e <2024-11-01> patch level 1`,
+    `LaTeX2e <2025-11-01>`,
     ...packages.map((p) => `(/texmf-dist/tex/latex/${p}/${p}.sty)`),
     `[1]`,
     ...diagnostics.map(
@@ -130293,15 +130419,76 @@ async function startServer() {
   app.get("/api/compiler/status", async (req, res) => {
     const customDir = typeof req.query.customDir === "string" ? req.query.customDir : void 0;
     const detected = await detectLocalTexInstallation(customDir);
-    res.json({
-      ...detected,
-      supportedDistributions: [
-        { id: "texlive-2025", name: "TeX Live 2025", editions: ["full", "medium", "basic"] },
-        { id: "texlive-2024", name: "TeX Live 2024 LTS", editions: ["full", "medium", "basic"] },
-        { id: "miktex-24", name: "MiKTeX 24.1", editions: ["full", "medium", "basic"] },
-        { id: "miktex-portable", name: "MiKTeX Portable", editions: ["full", "basic"] }
-      ]
-    });
+    res.json(detected);
+  });
+  app.post("/api/compiler/test", async (req, res) => {
+    try {
+      const {
+        mode = "xelatex",
+        customBinaryPath = "",
+        remoteEndpointUrl = ""
+      } = req.body;
+      if (remoteEndpointUrl && remoteEndpointUrl.trim()) {
+        try {
+          const probe = await fetch(remoteEndpointUrl.trim(), { method: "OPTIONS" });
+          return res.json({
+            connected: probe.status < 500,
+            message: `Remote endpoint responded with HTTP ${probe.status}.`,
+            binaryPath: remoteEndpointUrl.trim(),
+            kpsewhichAvailable: false
+          });
+        } catch (err) {
+          return res.json({
+            connected: false,
+            message: `Remote compiler unreachable: ${err instanceof Error ? err.message : "Network error"}`
+          });
+        }
+      }
+      const detected = await detectLocalTexInstallation(customBinaryPath || void 0);
+      const selected = detected.binaries[mode] || Object.values(detected.binaries).find(Boolean) || null;
+      if (!selected) {
+        return res.json({
+          connected: false,
+          message: `No local ${mode} binary found in PATH or standard TeX Live / MiKTeX directories. Built-in sandbox typesetter will be used.`
+        });
+      }
+      const env2 = buildTexChildEnv([import_node_path2.default.dirname(selected.path), detected.detectedBinDir]);
+      let versionLine = selected.version;
+      let kpsewhichAvailable = false;
+      try {
+        const verOut = await execFileAsync(selected.path, ["--version"], { timeout: 4e3, env: env2 });
+        versionLine = verOut.stdout.split(/\r?\n/).find((l) => l.trim().length > 0)?.trim() || versionLine;
+      } catch {
+        return res.json({
+          connected: false,
+          message: `Found ${selected.path}, but executing --version failed.`,
+          binaryPath: selected.path
+        });
+      }
+      if (detected.binaries.kpsewhich?.path) {
+        try {
+          await execFileAsync(detected.binaries.kpsewhich.path, ["article.cls"], {
+            timeout: 4e3,
+            env: env2
+          });
+          kpsewhichAvailable = true;
+        } catch {
+          kpsewhichAvailable = false;
+        }
+      }
+      return res.json({
+        connected: true,
+        message: `Connected cleanly to ${detected.detectedFamily || "Local TeX"} (${versionLine})`,
+        binaryPath: selected.path,
+        versionBanner: versionLine,
+        kpsewhichAvailable
+      });
+    } catch (error) {
+      res.status(500).json({
+        connected: false,
+        message: error instanceof Error ? error.message : "Connection test failed."
+      });
+    }
   });
   app.post("/api/compile", async (req, res) => {
     const started = Date.now();
@@ -130316,7 +130503,14 @@ async function startServer() {
         customBinaryPath = "",
         remoteEndpointUrl = "",
         shellEscape = false,
-        synctex = true
+        synctex = true,
+        interactionMode = "nonstopmode",
+        compilePasses = "auto",
+        bibliographyTool = "auto",
+        outputFormat = "pdf",
+        fileLineError = true,
+        haltOnError = true,
+        extraArgs = ""
       } = req.body;
       const mainFile = files.find((f3) => f3.name === mainFileName) || files[0];
       if (!mainFile) {
@@ -130327,14 +130521,25 @@ async function startServer() {
           const remoteResp = await fetch(remoteEndpointUrl.trim(), {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ mainFileName, files, mode, distribution, edition })
+            body: JSON.stringify({
+              mainFileName,
+              files,
+              mode,
+              interactionMode,
+              compilePasses,
+              bibliographyTool,
+              outputFormat,
+              synctex,
+              shellEscape
+            })
           });
           if (remoteResp.ok && remoteResp.headers.get("content-type")?.includes("application/pdf")) {
             const buf = Buffer.from(await remoteResp.arrayBuffer());
             const compileId2 = import_node_crypto.default.randomUUID();
+            const safePdfName = import_node_path2.default.basename(mainFileName).replace(/\.tex$/i, ".pdf");
             compiledPdfs.set(compileId2, {
               buffer: buf,
-              filename: mainFileName.replace(/\.tex$/i, ".pdf"),
+              filename: safePdfName,
               createdAt: Date.now()
             });
             return res.json({
@@ -130344,10 +130549,11 @@ async function startServer() {
               durationMs: Date.now() - started,
               pageCount: 1,
               engineLabel: mode.toUpperCase(),
-              distributionLabel: `${distribution} (${edition})`,
+              distributionLabel: "Remote TeX Server",
               backendType: "remote-endpoint",
               rawLog: `Compiled via remote compiler endpoint ${remoteEndpointUrl} in ${Date.now() - started}ms.`,
               diagnostics: [{ level: "info", message: "Compiled cleanly via remote TeX server." }],
+              generatedFiles: [{ name: safePdfName, sizeBytes: buf.length }],
               timestamp: (/* @__PURE__ */ new Date()).toISOString()
             });
           }
@@ -130360,30 +130566,91 @@ async function startServer() {
       if (nativeCmd) {
         const tmpDir = await import_promises3.default.mkdtemp(import_node_path2.default.join(import_node_os.default.tmpdir(), "texcellent-"));
         try {
+          const env2 = buildTexChildEnv([import_node_path2.default.dirname(nativeCmd), detectedTex.detectedBinDir]);
           for (const f3 of files) {
-            const safeName = import_node_path2.default.basename(f3.name);
-            await import_promises3.default.writeFile(import_node_path2.default.join(tmpDir, safeName), f3.content, "utf8");
+            const relSafe = sanitizeRelativeTeXPath(f3.name);
+            const fullTarget = import_node_path2.default.join(tmpDir, relSafe);
+            await import_promises3.default.mkdir(import_node_path2.default.dirname(fullTarget), { recursive: true });
+            await import_promises3.default.writeFile(fullTarget, f3.content, "utf8");
           }
-          const args = ["-interaction=nonstopmode", "-halt-on-error"];
-          if (synctex) args.push("-synctex=1");
-          if (shellEscape) args.push("-shell-escape");
-          if (mode === "latexmk") args.push("-pdf");
-          args.push(import_node_path2.default.basename(mainFileName));
-          let stdout = "";
-          let stderr = "";
+          const safeMainRel = sanitizeRelativeTeXPath(mainFileName);
+          const args = buildCompilerCliArgs(mode, safeMainRel, {
+            compilerMode: mode,
+            interactionMode,
+            compilePasses,
+            bibliographyTool,
+            outputFormat,
+            fileLineError,
+            haltOnError,
+            shellEscape,
+            synctex,
+            extraArgs
+          });
+          const resolvedBib = resolveBibliographyTool(mainFile.content, files, bibliographyTool);
+          const passCount = resolvePassCount(
+            mainFile.content,
+            { compilerMode: mode, compilePasses },
+            resolvedBib
+          );
+          const logChunks = [];
           let compileOk = true;
-          try {
-            const out = await execFileAsync(nativeCmd, args, { cwd: tmpDir, timeout: 2e4 });
-            stdout = out.stdout;
-            stderr = out.stderr;
-          } catch (execErr) {
-            compileOk = false;
-            const e2 = execErr;
-            stdout = e2.stdout || "";
-            stderr = e2.stderr || e2.message || "";
+          const runCmd = async (cmdPath, cmdArgs, label) => {
+            try {
+              const out = await execFileAsync(cmdPath, cmdArgs, {
+                cwd: tmpDir,
+                timeout: 6e4,
+                maxBuffer: 10 * 1024 * 1024,
+                env: env2
+              });
+              if (out.stdout?.trim()) logChunks.push(`--- ${label} ---
+${out.stdout.trim()}`);
+              if (out.stderr?.trim()) logChunks.push(out.stderr.trim());
+              return true;
+            } catch (execErr) {
+              const e2 = execErr;
+              if (e2.stdout?.trim()) logChunks.push(`--- ${label} ---
+${e2.stdout.trim()}`);
+              if (e2.stderr?.trim()) logChunks.push(e2.stderr.trim());
+              else if (e2.message) logChunks.push(e2.message);
+              return false;
+            }
+          };
+          compileOk = await runCmd(nativeCmd, args, `${mode} (pass 1)`);
+          const jobBase = import_node_path2.default.basename(safeMainRel).replace(/\.tex$/i, "");
+          if (compileOk && resolvedBib !== "none" && mode !== "latexmk") {
+            const bibBin = detectedTex.binaries[resolvedBib]?.path;
+            if (bibBin) {
+              await runCmd(bibBin, [jobBase], resolvedBib);
+            }
           }
-          const pdfName = import_node_path2.default.basename(mainFileName).replace(/\.tex$/i, ".pdf");
+          for (let p = 2; p <= passCount && compileOk; p++) {
+            compileOk = await runCmd(nativeCmd, args, `${mode} (pass ${p})`);
+          }
+          if (compileOk && mode === "latex" && outputFormat === "pdf") {
+            const dviPath = import_node_path2.default.join(tmpDir, `${jobBase}.dvi`);
+            const dvipdfmx = detectedTex.binaries.dvipdfmx?.path;
+            try {
+              await import_promises3.default.access(dviPath);
+              if (dvipdfmx) {
+                await runCmd(dvipdfmx, [dviPath], "dvipdfmx");
+              }
+            } catch {
+            }
+          }
+          const generatedFiles = [];
+          try {
+            const outEntries = await import_promises3.default.readdir(tmpDir, { withFileTypes: true });
+            for (const entry of outEntries) {
+              if (entry.isFile() && /\.(pdf|dvi|xdv|synctex\.gz|aux|bbl|toc|log)$/i.test(entry.name)) {
+                const st = await import_promises3.default.stat(import_node_path2.default.join(tmpDir, entry.name));
+                generatedFiles.push({ name: entry.name, sizeBytes: st.size });
+              }
+            }
+          } catch {
+          }
+          const pdfName = `${jobBase}.pdf`;
           const pdfPath = import_node_path2.default.join(tmpDir, pdfName);
+          const distTitle = `${detectedTex.detectedFamily || "Local TeX"} (${import_node_path2.default.basename(nativeCmd)})`;
           try {
             const pdfBytes = await import_promises3.default.readFile(pdfPath);
             const compileId2 = import_node_crypto.default.randomUUID();
@@ -130399,19 +130666,27 @@ async function startServer() {
               durationMs: Date.now() - started,
               pageCount: 1,
               engineLabel: mode.toUpperCase(),
-              distributionLabel: `${distribution} (${edition})`,
+              distributionLabel: distTitle,
               backendType: "native-binary",
-              rawLog: `${stdout}
-${stderr}`.trim(),
+              rawLog: logChunks.join("\n\n").trim(),
               diagnostics: [
                 {
                   level: compileOk ? "info" : "error",
-                  message: compileOk ? `Compiled natively via ${nativeCmd}` : `Native compilation exited with errors.`
+                  message: compileOk ? `Compiled cleanly via ${nativeCmd} (${generatedFiles.length} output files)` : `Native compilation finished with errors.`
                 }
               ],
+              generatedFiles,
               timestamp: (/* @__PURE__ */ new Date()).toISOString()
             });
           } catch {
+            try {
+              const dotLog = await import_promises3.default.readFile(import_node_path2.default.join(tmpDir, `${jobBase}.log`), "utf8");
+              if (dotLog && !logChunks.join("").includes(dotLog.slice(0, 80))) {
+                logChunks.push(`--- ${jobBase}.log (tail) ---
+${dotLog.slice(-4e3)}`);
+              }
+            } catch {
+            }
             return res.json({
               success: false,
               compileId: "none",
@@ -130419,11 +130694,16 @@ ${stderr}`.trim(),
               durationMs: Date.now() - started,
               pageCount: 0,
               engineLabel: mode.toUpperCase(),
-              distributionLabel: `${distribution} (${edition})`,
+              distributionLabel: distTitle,
               backendType: "native-binary",
-              rawLog: `${stdout}
-${stderr}`.trim(),
-              diagnostics: [{ level: "error", message: "Native compiler failed to output PDF." }],
+              rawLog: logChunks.join("\n\n").trim(),
+              diagnostics: [
+                {
+                  level: "error",
+                  message: outputFormat !== "pdf" ? `Compiled in ${outputFormat.toUpperCase()} mode without PDF output.` : "Native compiler halted before producing a PDF file."
+                }
+              ],
+              generatedFiles,
               timestamp: (/* @__PURE__ */ new Date()).toISOString()
             });
           }
@@ -130433,7 +130713,7 @@ ${stderr}`.trim(),
         }
       }
       const parsed = parseLatexDocument(mainFile.content);
-      const diagnostics = validateLatexBuild(mainFile.content, mode, distribution, edition);
+      const diagnostics = validateLatexBuild(mainFile.content, mode);
       const hasError = diagnostics.some((d) => d.level === "error");
       const { buffer, pageCount } = await buildPdfBinaryFromLatex(mainFile.content, {
         mode,
@@ -130442,9 +130722,10 @@ ${stderr}`.trim(),
         projectName
       });
       const compileId = import_node_crypto.default.randomUUID();
+      const pdfFileName = import_node_path2.default.basename(mainFile.name).replace(/\.tex$/i, ".pdf");
       compiledPdfs.set(compileId, {
         buffer,
-        filename: mainFile.name.replace(/\.tex$/i, ".pdf"),
+        filename: pdfFileName,
         createdAt: Date.now()
       });
       const cutoff = Date.now() - 30 * 60 * 1e3;
@@ -130469,10 +130750,11 @@ ${stderr}`.trim(),
         durationMs,
         pageCount,
         engineLabel: mode.toUpperCase(),
-        distributionLabel: `${distribution} (${edition})`,
+        distributionLabel: "Built-in Typesetter",
         backendType: "built-in-typesetter",
         rawLog,
         diagnostics,
+        generatedFiles: [{ name: pdfFileName, sizeBytes: buffer.length }],
         timestamp: (/* @__PURE__ */ new Date()).toISOString()
       });
     } catch (error) {
@@ -130489,6 +130771,11 @@ ${stderr}`.trim(),
     res.setHeader("Cache-Control", "no-store");
     res.setHeader("Content-Disposition", `inline; filename="${entry.filename}"`);
     res.send(entry.buffer);
+  });
+  app.get("/api/ai/status", (_req, res) => {
+    res.json({
+      onlineConfigured: Boolean(process.env.GEMINI_API_KEY)
+    });
   });
   app.post("/api/ai/image-to-latex", async (req, res) => {
     try {
@@ -130509,6 +130796,8 @@ ${stderr}`.trim(),
           }
         }
       });
+      const dataUrlMatch = imageBase64.match(/^data:([^;]+);base64,/);
+      const resolvedMime = dataUrlMatch?.[1] || mimeType || "image/png";
       const cleanBase64 = imageBase64.replace(/^data:[^;]+;base64,/, "");
       const prompt = [
         `Convert the attached image into clean, accurate, ready-to-compile LaTeX code.`,
@@ -130520,7 +130809,7 @@ ${stderr}`.trim(),
         model: "gemini-4-hydrogen",
         contents: {
           parts: [
-            { inlineData: { mimeType, data: cleanBase64 } },
+            { inlineData: { mimeType: resolvedMime, data: cleanBase64 } },
             { text: prompt }
           ]
         },
@@ -130529,6 +130818,7 @@ ${stderr}`.trim(),
           responseMimeType: "application/json",
           responseSchema: {
             type: Type.OBJECT,
+            required: ["latex"],
             properties: {
               latex: {
                 type: Type.STRING,
@@ -130547,7 +130837,7 @@ ${stderr}`.trim(),
           }
         }
       });
-      const raw = (response.text || "{}").trim();
+      const raw = (response.text || "{}").trim().replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/i, "");
       const parsed = JSON.parse(raw);
       res.json({
         latex: parsed.latex || "",
@@ -130564,10 +130854,15 @@ ${stderr}`.trim(),
   });
   app.post("/api/ai/local-proxy", async (req, res) => {
     try {
-      const { endpointUrl, modelName, imageBase64, prompt } = req.body;
+      const { endpointUrl, modelName, imageBase64, mimeType = "image/png", prompt } = req.body;
       if (!endpointUrl) {
         return res.status(400).json({ error: "Local model endpoint URL is required." });
       }
+      if (!imageBase64) {
+        return res.status(400).json({ error: "Missing imageBase64 payload." });
+      }
+      const dataUrlMatch = imageBase64.match(/^data:([^;]+);base64,/);
+      const resolvedMime = dataUrlMatch?.[1] || mimeType || "image/png";
       const cleanBase64 = imageBase64.replace(/^data:[^;]+;base64,/, "");
       const systemPrompt = prompt || "Transcribe the mathematical formula, table, or text in this image into clean LaTeX code. Return only the LaTeX code without markdown fences.";
       const isOpenAiCompat = endpointUrl.includes("/v1/chat/completions");
@@ -130578,7 +130873,10 @@ ${stderr}`.trim(),
             role: "user",
             content: [
               { type: "text", text: systemPrompt },
-              { type: "image_url", image_url: { url: `data:image/png;base64,${cleanBase64}` } }
+              {
+                type: "image_url",
+                image_url: { url: `data:${resolvedMime};base64,${cleanBase64}` }
+              }
             ]
           }
         ]

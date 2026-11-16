@@ -86,8 +86,21 @@ export const SmartAiModal: React.FC<SmartAiModalProps> = ({
   // Smart Snippets state
   const [snippetCategory, setSnippetCategory] = useState<'All' | SnippetCategory>('All');
   const [snippetQuery, setSnippetQuery] = useState('');
+  const [onlineAiConfigured, setOnlineAiConfigured] = useState<boolean | null>(null);
 
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+
+  React.useEffect(() => {
+    if (!isOpen) return;
+    fetch('/api/ai/status')
+      .then((r) => (r.ok ? r.json() : null))
+      .then((data: { onlineConfigured?: boolean } | null) => {
+        if (data && typeof data.onlineConfigured === 'boolean') {
+          setOnlineAiConfigured(data.onlineConfigured);
+        }
+      })
+      .catch(() => {});
+  }, [isOpen]);
 
   const filteredSnippets = useMemo(() => {
     const q = snippetQuery.trim().toLowerCase();
@@ -103,16 +116,7 @@ export const SmartAiModal: React.FC<SmartAiModalProps> = ({
     });
   }, [snippetCategory, snippetQuery]);
 
-  if (!isOpen) return null;
-
-  const copyText = (key: string, text: string) => {
-    if (!text) return;
-    navigator.clipboard.writeText(text);
-    setCopiedKey(key);
-    setTimeout(() => setCopiedKey(''), 1500);
-  };
-
-  const handleFile = (file: File) => {
+  const handleFile = React.useCallback((file: File) => {
     setError('');
     setImageMime(file.type || 'image/png');
     const reader = new FileReader();
@@ -122,6 +126,35 @@ export const SmartAiModal: React.FC<SmartAiModalProps> = ({
       }
     };
     reader.readAsDataURL(file);
+  }, []);
+
+  React.useEffect(() => {
+    if (!isOpen || activeTab !== 'image2tex') return;
+    const onWindowPaste = (e: ClipboardEvent) => {
+      const items = e.clipboardData?.items;
+      if (!items) return;
+      for (const item of items) {
+        if (item.type.startsWith('image/')) {
+          const pasted = item.getAsFile();
+          if (pasted) {
+            e.preventDefault();
+            handleFile(pasted);
+            break;
+          }
+        }
+      }
+    };
+    window.addEventListener('paste', onWindowPaste);
+    return () => window.removeEventListener('paste', onWindowPaste);
+  }, [isOpen, activeTab, handleFile]);
+
+  if (!isOpen) return null;
+
+  const copyText = (key: string, text: string) => {
+    if (!text) return;
+    navigator.clipboard.writeText(text);
+    setCopiedKey(key);
+    setTimeout(() => setCopiedKey(''), 1500);
   };
 
   const handleCreateSampleEquationImage = () => {
@@ -167,6 +200,7 @@ export const SmartAiModal: React.FC<SmartAiModalProps> = ({
               endpointUrl: localEndpoint,
               modelName: localModel,
               imageBase64: imageDataUrl,
+              mimeType: imageMime,
               prompt: `Convert this ${taskMode} image into clean LaTeX for ${compilerMode}. Return only LaTeX code.`,
             };
 
@@ -347,6 +381,42 @@ export const SmartAiModal: React.FC<SmartAiModalProps> = ({
           {/* TAB 1: Image -> LaTeX */}
           {activeTab === 'image2tex' && (
             <div className="space-y-4">
+              <div
+                className="px-3 py-2 rounded-lg border text-xs flex items-center justify-between gap-2 flex-wrap"
+                style={{
+                  backgroundColor: theme.ui.surface,
+                  borderColor:
+                    provider === 'online' && onlineAiConfigured === false
+                      ? '#d97706'
+                      : theme.ui.border,
+                  color: theme.ui.textMuted,
+                }}
+              >
+                <span>
+                  {provider === 'online'
+                    ? onlineAiConfigured === true
+                      ? 'Online AI (Gemini Vision) is active on the backend server.'
+                      : onlineAiConfigured === false
+                        ? 'Online Gemini key is not set on this server. Configure GEMINI_API_KEY in environment secrets or switch to Local Model (Ollama).'
+                        : 'Checking AI Vision backend availability...'
+                    : 'Local Vision Proxy active — sends image to your local Ollama / LM Studio endpoint.'}
+                </span>
+                {provider === 'online' && onlineAiConfigured === false && (
+                  <button
+                    type="button"
+                    onClick={() => setProvider('local')}
+                    className="px-2 py-0.5 text-[11px] font-semibold rounded border whitespace-nowrap"
+                    style={{
+                      backgroundColor: theme.ui.bg,
+                      borderColor: theme.ui.accent,
+                      color: theme.ui.accent,
+                    }}
+                  >
+                    Switch to Local Model
+                  </button>
+                )}
+              </div>
+
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div>
                   <span className="block text-xs font-medium mb-1.5" style={{ color: theme.ui.textMuted }}>

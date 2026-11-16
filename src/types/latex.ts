@@ -8,6 +8,18 @@ export type TexDistribution =
 
 export type TexEdition = 'full' | 'medium' | 'basic';
 
+export type CompilerInteractionMode =
+  | 'nonstopmode'
+  | 'batchmode'
+  | 'errorstopmode'
+  | 'scrollmode';
+
+export type CompilerPasses = 'auto' | '1' | '2' | '3';
+
+export type BibliographyTool = 'auto' | 'none' | 'bibtex' | 'biber';
+
+export type OutputFormat = 'pdf' | 'dvi' | 'draft';
+
 export type ThemeId =
   | 'github-light'
   | 'github-dark'
@@ -15,7 +27,13 @@ export type ThemeId =
   | 'nord'
   | 'solarized-light'
   | 'tokyo-night'
-  | 'monokai';
+  | 'monokai'
+  | 'overleaf-crisp'
+  | 'dracula'
+  | 'one-dark'
+  | 'catppuccin-mocha'
+  | 'catppuccin-latte'
+  | 'gruvbox-dark';
 
 export type DirectionMode = 'auto' | 'ltr' | 'rtl';
 
@@ -26,7 +44,13 @@ export type EditorFontId =
   | 'ibm-plex'
   | 'fira-code'
   | 'source-code'
+  | 'roboto-mono'
+  | 'inconsolata'
+  | 'ubuntu-mono'
+  | 'space-mono'
+  | 'noto-sans-mono'
   | 'vazirmatn'
+  | 'noto-naskh'
   | 'system-mono';
 
 export interface ProjectFile {
@@ -43,8 +67,8 @@ export interface LatexProject {
   mainFileId: string;
   files: ProjectFile[];
   compilerMode: CompilerMode;
-  distribution: TexDistribution;
-  edition: TexEdition;
+  distribution?: TexDistribution;
+  edition?: TexEdition;
   updatedAt: string;
 }
 
@@ -66,22 +90,32 @@ export interface CompileResult {
   backendType: 'native-binary' | 'remote-endpoint' | 'built-in-typesetter';
   rawLog: string;
   diagnostics: CompileLogEntry[];
+  generatedFiles?: Array<{ name: string; sizeBytes: number }>;
   timestamp: string;
 }
 
 export interface CompilerSettings {
-  distribution: TexDistribution;
-  edition: TexEdition;
   compilerMode: CompilerMode;
   customBinaryPath: string;
   remoteEndpointUrl: string;
   shellEscape: boolean;
   synctex: boolean;
+  interactionMode: CompilerInteractionMode;
+  compilePasses: CompilerPasses;
+  bibliographyTool: BibliographyTool;
+  outputFormat: OutputFormat;
+  fileLineError: boolean;
+  haltOnError: boolean;
+  extraArgs: string;
+  /** Kept optional for backwards-compatible persistence only; not shown in UI */
+  distribution?: TexDistribution;
+  edition?: TexEdition;
 }
 
 export interface DetectedTexInstallation {
   hasNative: boolean;
   detectedDistribution: TexDistribution | null;
+  detectedFamily?: 'TeX Live' | 'MiKTeX' | 'TinyTeX' | 'TeX' | null;
   detectedBinDir: string | null;
   versionBanner: string | null;
   binaries: Record<string, { path: string; version: string; distribution: string } | null>;

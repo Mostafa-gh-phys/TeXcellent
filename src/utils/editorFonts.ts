@@ -32,11 +32,47 @@ export const EDITOR_FONTS: Record<EditorFontId, EditorFontOption> = {
     cssFamily: "'Source Code Pro', 'Vazirmatn', ui-monospace, monospace",
     rtlFamily: "'Vazirmatn', 'Source Code Pro', monospace",
   },
+  'roboto-mono': {
+    id: 'roboto-mono',
+    name: 'Roboto Mono',
+    cssFamily: "'Roboto Mono', 'Vazirmatn', ui-monospace, monospace",
+    rtlFamily: "'Vazirmatn', 'Roboto Mono', monospace",
+  },
+  inconsolata: {
+    id: 'inconsolata',
+    name: 'Inconsolata',
+    cssFamily: "'Inconsolata', 'Vazirmatn', ui-monospace, monospace",
+    rtlFamily: "'Vazirmatn', 'Inconsolata', monospace",
+  },
+  'ubuntu-mono': {
+    id: 'ubuntu-mono',
+    name: 'Ubuntu Mono',
+    cssFamily: "'Ubuntu Mono', 'Vazirmatn', ui-monospace, monospace",
+    rtlFamily: "'Vazirmatn', 'Ubuntu Mono', monospace",
+  },
+  'space-mono': {
+    id: 'space-mono',
+    name: 'Space Mono',
+    cssFamily: "'Space Mono', 'Vazirmatn', ui-monospace, monospace",
+    rtlFamily: "'Vazirmatn', 'Space Mono', monospace",
+  },
+  'noto-sans-mono': {
+    id: 'noto-sans-mono',
+    name: 'Noto Sans Mono',
+    cssFamily: "'Noto Sans Mono', 'Vazirmatn', ui-monospace, monospace",
+    rtlFamily: "'Vazirmatn', 'Noto Sans Mono', monospace",
+  },
   vazirmatn: {
     id: 'vazirmatn',
     name: 'Vazirmatn (RTL Focus)',
     cssFamily: "'Vazirmatn', 'JetBrains Mono', sans-serif",
     rtlFamily: "'Vazirmatn', sans-serif",
+  },
+  'noto-naskh': {
+    id: 'noto-naskh',
+    name: 'Noto Naskh Arabic (RTL Editorial)',
+    cssFamily: "'JetBrains Mono', 'Noto Naskh Arabic', monospace",
+    rtlFamily: "'Noto Naskh Arabic', 'Vazirmatn', serif",
   },
   'system-mono': {
     id: 'system-mono',

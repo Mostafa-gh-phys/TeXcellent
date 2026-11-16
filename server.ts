@@ -12,9 +12,19 @@ import { PDFDocument, PDFFont, StandardFonts, rgb } from 'pdf-lib';
 import fontkit from '@pdf-lib/fontkit';
 import { parseLatexDocument, validateLatexBuild } from './src/utils/latexParser';
 import { latexMathToUnicode, shapePersianForPdf } from './src/utils/pdfTextShaper';
+import {
+  buildCompilerCliArgs,
+  resolveBibliographyTool,
+  resolvePassCount,
+  sanitizeRelativeTeXPath,
+} from './src/utils/compilerArgs';
 import type {
+  BibliographyTool,
+  CompilerInteractionMode,
   CompilerMode,
+  CompilerPasses,
   DetectedTexInstallation,
+  OutputFormat,
   ProjectFile,
   TexDistribution,
   TexEdition,
@@ -97,22 +107,27 @@ async function collectStandardTexSearchDirs(customDir?: string): Promise<string[
 
   if (isWin) {
     const localAppData = process.env.LOCALAPPDATA || path.join(home, 'AppData', 'Local');
+    const appData = process.env.APPDATA || path.join(home, 'AppData', 'Roaming');
     const programFiles = process.env.ProgramFiles || 'C:\\Program Files';
     for (const yr of ['2026', '2025', '2024', '2023', '2022', '2021', '2020']) {
       dirs.add(`C:\\texlive\\${yr}\\bin\\windows`);
       dirs.add(`C:\\texlive\\${yr}\\bin\\win32`);
     }
+    dirs.add(path.join(appData, 'TinyTeX', 'bin', 'windows'));
     dirs.add(path.join(programFiles, 'MiKTeX', 'miktex', 'bin', 'x64'));
     dirs.add(path.join(localAppData, 'Programs', 'MiKTeX', 'miktex', 'bin', 'x64'));
     dirs.add('C:\\miktex-portable\\texmfs\\install\\miktex\\bin\\x64');
   } else {
     if (isMac) {
       dirs.add('/Library/TeX/texbin');
+      dirs.add(path.join(home, 'Library', 'TinyTeX', 'bin', 'universal-darwin'));
       dirs.add('/opt/homebrew/bin');
       dirs.add('/usr/local/bin');
     } else {
       dirs.add('/usr/bin');
       dirs.add('/usr/local/bin');
+      dirs.add(path.join(home, '.TinyTeX', 'bin', 'x86_64-linux'));
+      dirs.add(path.join(home, '.TinyTeX', 'bin', 'aarch64-linux'));
     }
     dirs.add(path.join(home, 'bin'));
     dirs.add(path.join(home, '.miktex', 'texmfs', 'install', 'miktex', 'bin', 'x64'));
@@ -134,6 +149,16 @@ async function collectStandardTexSearchDirs(customDir?: string): Promise<string[
   return Array.from(dirs);
 }
 
+function buildTexChildEnv(extraDirs: Array<string | null | undefined>): NodeJS.ProcessEnv {
+  const valid = extraDirs.map((d) => d?.trim()).filter((d): d is string => Boolean(d));
+  const sep = path.delimiter;
+  const currentPath = process.env.PATH || '';
+  return {
+    ...process.env,
+    PATH: valid.length > 0 ? `${valid.join(sep)}${sep}${currentPath}` : currentPath,
+  };
+}
+
 function classifyDistributionFromBanner(banner: string, binPath: string): TexDistribution | null {
   const lower = `${banner} ${binPath}`.toLowerCase();
   if (lower.includes('miktex')) {
@@ -148,9 +173,23 @@ function classifyDistributionFromBanner(banner: string, binPath: string): TexDis
   return null;
 }
 
+function classifyFamilyFromBanner(
+  banner: string,
+  binPath: string
+): DetectedTexInstallation['detectedFamily'] {
+  const lower = `${banner} ${binPath}`.toLowerCase();
+  if (lower.includes('miktex')) return 'MiKTeX';
+  if (lower.includes('tinytex')) return 'TinyTeX';
+  if (lower.includes('texlive') || lower.includes('tex live')) return 'TeX Live';
+  return 'TeX';
+}
+
 async function inspectTexBinary(binPath: string): Promise<{ version: string; distribution: string }> {
   try {
-    const { stdout } = await execFileAsync(binPath, ['--version'], { timeout: 1500 });
+    const { stdout } = await execFileAsync(binPath, ['--version'], {
+      timeout: 2500,
+      env: buildTexChildEnv([path.dirname(binPath)]),
+    });
     const firstLine = stdout.split(/\r?\n/).find((l) => l.trim().length > 0)?.trim() || 'Installed';
     const dist = classifyDistributionFromBanner(firstLine, binPath) || 'texlive-2025';
     return { version: firstLine, distribution: dist };
@@ -160,7 +199,9 @@ async function inspectTexBinary(binPath: string): Promise<{ version: string; dis
 }
 
 async function detectLocalTexInstallation(customDir?: string): Promise<DetectedTexInstallation> {
-  const candidates: CompilerMode[] = ['xelatex', 'pdflatex', 'lualatex', 'latex', 'latexmk'];
+  const engineCandidates: CompilerMode[] = ['xelatex', 'pdflatex', 'lualatex', 'latex', 'latexmk'];
+  const auxCandidates = ['bibtex', 'biber', 'kpsewhich', 'dvipdfmx'];
+  const allCandidates = [...engineCandidates, ...auxCandidates];
   const binaries: DetectedTexInstallation['binaries'] = {};
   const searchDirs = await collectStandardTexSearchDirs(customDir);
   const lookupCmd = process.platform === 'win32' ? 'where' : 'which';
@@ -168,9 +209,10 @@ async function detectLocalTexInstallation(customDir?: string): Promise<DetectedT
 
   let detectedBinDir: string | null = null;
   let detectedDistribution: TexDistribution | null = null;
+  let detectedFamily: DetectedTexInstallation['detectedFamily'] = null;
   let versionBanner: string | null = null;
 
-  for (const cmd of candidates) {
+  for (const cmd of allCandidates) {
     let foundPath: string | null = null;
     for (const dir of searchDirs) {
       const candidatePath = path.join(dir, `${cmd}${ext}`);
@@ -199,20 +241,26 @@ async function detectLocalTexInstallation(customDir?: string): Promise<DetectedT
         version: info.version,
         distribution: info.distribution,
       };
-      if (!detectedBinDir) detectedBinDir = path.dirname(foundPath);
-      if (!versionBanner) versionBanner = info.version;
-      if (!detectedDistribution) {
-        detectedDistribution = classifyDistributionFromBanner(info.version, foundPath);
+      if (engineCandidates.includes(cmd as CompilerMode)) {
+        if (!detectedBinDir) detectedBinDir = path.dirname(foundPath);
+        if (!versionBanner) versionBanner = info.version;
+        if (!detectedDistribution) {
+          detectedDistribution = classifyDistributionFromBanner(info.version, foundPath);
+        }
+        if (!detectedFamily) {
+          detectedFamily = classifyFamilyFromBanner(info.version, foundPath);
+        }
       }
     } else {
       binaries[cmd] = null;
     }
   }
 
-  const hasNative = Object.values(binaries).some(Boolean);
+  const hasNative = engineCandidates.some((cmd) => Boolean(binaries[cmd]));
   return {
     hasNative,
     detectedDistribution,
+    detectedFamily,
     detectedBinDir,
     versionBanner,
     binaries,
@@ -567,8 +615,8 @@ async function buildPdfBinaryFromLatex(
 }
 
 function formatTexEngineLog(
-  distribution: TexDistribution,
-  edition: TexEdition,
+  _distribution: TexDistribution,
+  _edition: TexEdition,
   mode: CompilerMode,
   mainFileName: string,
   packages: string[],
@@ -576,18 +624,10 @@ function formatTexEngineLog(
   pageCount: number,
   durationMs: number
 ): string {
-  const distTitle =
-    distribution === 'texlive-2025'
-      ? 'This is XeTeX/TeX Live 2025 (TeX Live 2025/Debian)'
-      : distribution === 'texlive-2024'
-        ? 'This is TeX Live 2024 (LTS)'
-        : distribution === 'miktex-24'
-          ? 'This is MiKTeX 24.1 (Windows/Linux Console)'
-          : 'This is MiKTeX 24.1 Portable';
   const lines = [
-    `${distTitle} — Edition: ${edition.toUpperCase()} — Mode: ${mode.toUpperCase()}`,
+    `TeXcellent Built-in Typesetter — Engine: ${mode.toUpperCase()}`,
     `entering extended mode (./${mainFileName})`,
-    `LaTeX2e <2024-11-01> patch level 1`,
+    `LaTeX2e <2025-11-01>`,
     ...packages.map((p) => `(/texmf-dist/tex/latex/${p}/${p}.sty)`),
     `[1]`,
     ...diagnostics.map((d) =>
@@ -611,15 +651,88 @@ async function startServer() {
   app.get('/api/compiler/status', async (req, res) => {
     const customDir = typeof req.query.customDir === 'string' ? req.query.customDir : undefined;
     const detected = await detectLocalTexInstallation(customDir);
-    res.json({
-      ...detected,
-      supportedDistributions: [
-        { id: 'texlive-2025', name: 'TeX Live 2025', editions: ['full', 'medium', 'basic'] },
-        { id: 'texlive-2024', name: 'TeX Live 2024 LTS', editions: ['full', 'medium', 'basic'] },
-        { id: 'miktex-24', name: 'MiKTeX 24.1', editions: ['full', 'medium', 'basic'] },
-        { id: 'miktex-portable', name: 'MiKTeX Portable', editions: ['full', 'basic'] },
-      ],
-    });
+    res.json(detected);
+  });
+
+  // 1b. Live Backend Connection Test (Local TeX Live / MiKTeX or Remote Endpoint)
+  app.post('/api/compiler/test', async (req, res) => {
+    try {
+      const {
+        mode = 'xelatex',
+        customBinaryPath = '',
+        remoteEndpointUrl = '',
+      } = req.body as {
+        mode?: CompilerMode;
+        customBinaryPath?: string;
+        remoteEndpointUrl?: string;
+      };
+
+      if (remoteEndpointUrl && remoteEndpointUrl.trim()) {
+        try {
+          const probe = await fetch(remoteEndpointUrl.trim(), { method: 'OPTIONS' });
+          return res.json({
+            connected: probe.status < 500,
+            message: `Remote endpoint responded with HTTP ${probe.status}.`,
+            binaryPath: remoteEndpointUrl.trim(),
+            kpsewhichAvailable: false,
+          });
+        } catch (err) {
+          return res.json({
+            connected: false,
+            message: `Remote compiler unreachable: ${err instanceof Error ? err.message : 'Network error'}`,
+          });
+        }
+      }
+
+      const detected = await detectLocalTexInstallation(customBinaryPath || undefined);
+      const selected = detected.binaries[mode] || Object.values(detected.binaries).find(Boolean) || null;
+      if (!selected) {
+        return res.json({
+          connected: false,
+          message: `No local ${mode} binary found in PATH or standard TeX Live / MiKTeX directories. Built-in sandbox typesetter will be used.`,
+        });
+      }
+
+      const env = buildTexChildEnv([path.dirname(selected.path), detected.detectedBinDir]);
+      let versionLine = selected.version;
+      let kpsewhichAvailable = false;
+      try {
+        const verOut = await execFileAsync(selected.path, ['--version'], { timeout: 4000, env });
+        versionLine =
+          verOut.stdout.split(/\r?\n/).find((l) => l.trim().length > 0)?.trim() || versionLine;
+      } catch {
+        return res.json({
+          connected: false,
+          message: `Found ${selected.path}, but executing --version failed.`,
+          binaryPath: selected.path,
+        });
+      }
+
+      if (detected.binaries.kpsewhich?.path) {
+        try {
+          await execFileAsync(detected.binaries.kpsewhich.path, ['article.cls'], {
+            timeout: 4000,
+            env,
+          });
+          kpsewhichAvailable = true;
+        } catch {
+          kpsewhichAvailable = false;
+        }
+      }
+
+      return res.json({
+        connected: true,
+        message: `Connected cleanly to ${detected.detectedFamily || 'Local TeX'} (${versionLine})`,
+        binaryPath: selected.path,
+        versionBanner: versionLine,
+        kpsewhichAvailable,
+      });
+    } catch (error) {
+      res.status(500).json({
+        connected: false,
+        message: error instanceof Error ? error.message : 'Connection test failed.',
+      });
+    }
   });
 
   // 2. LaTeX Compile endpoint (native binary -> remote endpoint -> built-in typesetter)
@@ -637,6 +750,13 @@ async function startServer() {
         remoteEndpointUrl = '',
         shellEscape = false,
         synctex = true,
+        interactionMode = 'nonstopmode',
+        compilePasses = 'auto',
+        bibliographyTool = 'auto',
+        outputFormat = 'pdf',
+        fileLineError = true,
+        haltOnError = true,
+        extraArgs = '',
       } = req.body as {
         projectName?: string;
         mainFileName?: string;
@@ -648,6 +768,13 @@ async function startServer() {
         remoteEndpointUrl?: string;
         shellEscape?: boolean;
         synctex?: boolean;
+        interactionMode?: CompilerInteractionMode;
+        compilePasses?: CompilerPasses;
+        bibliographyTool?: BibliographyTool;
+        outputFormat?: OutputFormat;
+        fileLineError?: boolean;
+        haltOnError?: boolean;
+        extraArgs?: string;
       };
 
       const mainFile = files.find((f) => f.name === mainFileName) || files[0];
@@ -661,14 +788,25 @@ async function startServer() {
           const remoteResp = await fetch(remoteEndpointUrl.trim(), {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ mainFileName, files, mode, distribution, edition }),
+            body: JSON.stringify({
+              mainFileName,
+              files,
+              mode,
+              interactionMode,
+              compilePasses,
+              bibliographyTool,
+              outputFormat,
+              synctex,
+              shellEscape,
+            }),
           });
           if (remoteResp.ok && remoteResp.headers.get('content-type')?.includes('application/pdf')) {
             const buf = Buffer.from(await remoteResp.arrayBuffer());
             const compileId = crypto.randomUUID();
+            const safePdfName = path.basename(mainFileName).replace(/\.tex$/i, '.pdf');
             compiledPdfs.set(compileId, {
               buffer: buf,
-              filename: mainFileName.replace(/\.tex$/i, '.pdf'),
+              filename: safePdfName,
               createdAt: Date.now(),
             });
             return res.json({
@@ -678,15 +816,15 @@ async function startServer() {
               durationMs: Date.now() - started,
               pageCount: 1,
               engineLabel: mode.toUpperCase(),
-              distributionLabel: `${distribution} (${edition})`,
+              distributionLabel: 'Remote TeX Server',
               backendType: 'remote-endpoint',
               rawLog: `Compiled via remote compiler endpoint ${remoteEndpointUrl} in ${Date.now() - started}ms.`,
               diagnostics: [{ level: 'info', message: 'Compiled cleanly via remote TeX server.' }],
+              generatedFiles: [{ name: safePdfName, sizeBytes: buf.length }],
               timestamp: new Date().toISOString(),
             });
           }
         } catch (err) {
-          // Fall through with warning if remote server unavailable
           console.warn('Remote compiler endpoint unreachable, checking native/built-in:', err);
         }
       }
@@ -697,32 +835,107 @@ async function startServer() {
       if (nativeCmd) {
         const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'texcellent-'));
         try {
+          const env = buildTexChildEnv([path.dirname(nativeCmd), detectedTex.detectedBinDir]);
+
           for (const f of files) {
-            const safeName = path.basename(f.name);
-            await fs.writeFile(path.join(tmpDir, safeName), f.content, 'utf8');
+            const relSafe = sanitizeRelativeTeXPath(f.name);
+            const fullTarget = path.join(tmpDir, relSafe);
+            await fs.mkdir(path.dirname(fullTarget), { recursive: true });
+            await fs.writeFile(fullTarget, f.content, 'utf8');
           }
-          const args = ['-interaction=nonstopmode', '-halt-on-error'];
-          if (synctex) args.push('-synctex=1');
-          if (shellEscape) args.push('-shell-escape');
-          if (mode === 'latexmk') args.push('-pdf');
-          args.push(path.basename(mainFileName));
 
-          let stdout = '';
-          let stderr = '';
+          const safeMainRel = sanitizeRelativeTeXPath(mainFileName);
+          const args = buildCompilerCliArgs(mode, safeMainRel, {
+            compilerMode: mode,
+            interactionMode,
+            compilePasses,
+            bibliographyTool,
+            outputFormat,
+            fileLineError,
+            haltOnError,
+            shellEscape,
+            synctex,
+            extraArgs,
+          });
+
+          const resolvedBib = resolveBibliographyTool(mainFile.content, files, bibliographyTool);
+          const passCount = resolvePassCount(
+            mainFile.content,
+            { compilerMode: mode, compilePasses },
+            resolvedBib
+          );
+
+          const logChunks: string[] = [];
           let compileOk = true;
-          try {
-            const out = await execFileAsync(nativeCmd, args, { cwd: tmpDir, timeout: 20000 });
-            stdout = out.stdout;
-            stderr = out.stderr;
-          } catch (execErr: unknown) {
-            compileOk = false;
-            const e = execErr as { stdout?: string; stderr?: string; message?: string };
-            stdout = e.stdout || '';
-            stderr = e.stderr || e.message || '';
+          const runCmd = async (cmdPath: string, cmdArgs: string[], label: string) => {
+            try {
+              const out = await execFileAsync(cmdPath, cmdArgs, {
+                cwd: tmpDir,
+                timeout: 60000,
+                maxBuffer: 10 * 1024 * 1024,
+                env,
+              });
+              if (out.stdout?.trim()) logChunks.push(`--- ${label} ---\n${out.stdout.trim()}`);
+              if (out.stderr?.trim()) logChunks.push(out.stderr.trim());
+              return true;
+            } catch (execErr: unknown) {
+              const e = execErr as { stdout?: string; stderr?: string; message?: string };
+              if (e.stdout?.trim()) logChunks.push(`--- ${label} ---\n${e.stdout.trim()}`);
+              if (e.stderr?.trim()) logChunks.push(e.stderr.trim());
+              else if (e.message) logChunks.push(e.message);
+              return false;
+            }
+          };
+
+          // Pass 1
+          compileOk = await runCmd(nativeCmd, args, `${mode} (pass 1)`);
+
+          // Bibliography step (BibTeX / Biber) if requested and pass 1 generated aux/bcf
+          const jobBase = path.basename(safeMainRel).replace(/\.tex$/i, '');
+          if (compileOk && resolvedBib !== 'none' && mode !== 'latexmk') {
+            const bibBin = detectedTex.binaries[resolvedBib]?.path;
+            if (bibBin) {
+              await runCmd(bibBin, [jobBase], resolvedBib);
+            }
           }
 
-          const pdfName = path.basename(mainFileName).replace(/\.tex$/i, '.pdf');
+          // Additional passes for refs/TOC/citations
+          for (let p = 2; p <= passCount && compileOk; p++) {
+            compileOk = await runCmd(nativeCmd, args, `${mode} (pass ${p})`);
+          }
+
+          // Convert DVI/XDV -> PDF via dvipdfmx when latex (DVI) was chosen in PDF output mode
+          if (compileOk && mode === 'latex' && outputFormat === 'pdf') {
+            const dviPath = path.join(tmpDir, `${jobBase}.dvi`);
+            const dvipdfmx = detectedTex.binaries.dvipdfmx?.path;
+            try {
+              await fs.access(dviPath);
+              if (dvipdfmx) {
+                await runCmd(dvipdfmx, [dviPath], 'dvipdfmx');
+              }
+            } catch {
+              // no dvi output
+            }
+          }
+
+          // Collect generated output files inside tmpDir
+          const generatedFiles: Array<{ name: string; sizeBytes: number }> = [];
+          try {
+            const outEntries = await fs.readdir(tmpDir, { withFileTypes: true });
+            for (const entry of outEntries) {
+              if (entry.isFile() && /\.(pdf|dvi|xdv|synctex\.gz|aux|bbl|toc|log)$/i.test(entry.name)) {
+                const st = await fs.stat(path.join(tmpDir, entry.name));
+                generatedFiles.push({ name: entry.name, sizeBytes: st.size });
+              }
+            }
+          } catch {
+            // ignore readdir failure
+          }
+
+          const pdfName = `${jobBase}.pdf`;
           const pdfPath = path.join(tmpDir, pdfName);
+          const distTitle = `${detectedTex.detectedFamily || 'Local TeX'} (${path.basename(nativeCmd)})`;
+
           try {
             const pdfBytes = await fs.readFile(pdfPath);
             const compileId = crypto.randomUUID();
@@ -738,21 +951,30 @@ async function startServer() {
               durationMs: Date.now() - started,
               pageCount: 1,
               engineLabel: mode.toUpperCase(),
-              distributionLabel: `${distribution} (${edition})`,
+              distributionLabel: distTitle,
               backendType: 'native-binary',
-              rawLog: `${stdout}\n${stderr}`.trim(),
+              rawLog: logChunks.join('\n\n').trim(),
               diagnostics: [
                 {
                   level: compileOk ? 'info' : 'error',
                   message: compileOk
-                    ? `Compiled natively via ${nativeCmd}`
-                    : `Native compilation exited with errors.`,
+                    ? `Compiled cleanly via ${nativeCmd} (${generatedFiles.length} output files)`
+                    : `Native compilation finished with errors.`,
                 },
               ],
+              generatedFiles,
               timestamp: new Date().toISOString(),
             });
           } catch {
-            // If native binary failed before generating PDF, return log error
+            // Also read .log if stdout missed error details
+            try {
+              const dotLog = await fs.readFile(path.join(tmpDir, `${jobBase}.log`), 'utf8');
+              if (dotLog && !logChunks.join('').includes(dotLog.slice(0, 80))) {
+                logChunks.push(`--- ${jobBase}.log (tail) ---\n${dotLog.slice(-4000)}`);
+              }
+            } catch {
+              // ignore missing .log
+            }
             return res.json({
               success: false,
               compileId: 'none',
@@ -760,10 +982,19 @@ async function startServer() {
               durationMs: Date.now() - started,
               pageCount: 0,
               engineLabel: mode.toUpperCase(),
-              distributionLabel: `${distribution} (${edition})`,
+              distributionLabel: distTitle,
               backendType: 'native-binary',
-              rawLog: `${stdout}\n${stderr}`.trim(),
-              diagnostics: [{ level: 'error', message: 'Native compiler failed to output PDF.' }],
+              rawLog: logChunks.join('\n\n').trim(),
+              diagnostics: [
+                {
+                  level: 'error',
+                  message:
+                    outputFormat !== 'pdf'
+                      ? `Compiled in ${outputFormat.toUpperCase()} mode without PDF output.`
+                      : 'Native compiler halted before producing a PDF file.',
+                },
+              ],
+              generatedFiles,
               timestamp: new Date().toISOString(),
             });
           }
@@ -774,7 +1005,7 @@ async function startServer() {
 
       // C. Built-in sandbox typesetter + real PDF binary generation
       const parsed = parseLatexDocument(mainFile.content);
-      const diagnostics = validateLatexBuild(mainFile.content, mode, distribution, edition);
+      const diagnostics = validateLatexBuild(mainFile.content, mode);
       const hasError = diagnostics.some((d) => d.level === 'error');
       const { buffer, pageCount } = await buildPdfBinaryFromLatex(mainFile.content, {
         mode,
@@ -784,9 +1015,10 @@ async function startServer() {
       });
 
       const compileId = crypto.randomUUID();
+      const pdfFileName = path.basename(mainFile.name).replace(/\.tex$/i, '.pdf');
       compiledPdfs.set(compileId, {
         buffer,
-        filename: mainFile.name.replace(/\.tex$/i, '.pdf'),
+        filename: pdfFileName,
         createdAt: Date.now(),
       });
 
@@ -815,10 +1047,11 @@ async function startServer() {
         durationMs,
         pageCount,
         engineLabel: mode.toUpperCase(),
-        distributionLabel: `${distribution} (${edition})`,
+        distributionLabel: 'Built-in Typesetter',
         backendType: 'built-in-typesetter',
         rawLog,
         diagnostics,
+        generatedFiles: [{ name: pdfFileName, sizeBytes: buffer.length }],
         timestamp: new Date().toISOString(),
       });
     } catch (error) {
@@ -839,6 +1072,12 @@ async function startServer() {
   });
 
   // 3. AI Image-to-LaTeX (Server-side Gemini Vision + Local Model Proxy)
+  app.get('/api/ai/status', (_req, res) => {
+    res.json({
+      onlineConfigured: Boolean(process.env.GEMINI_API_KEY),
+    });
+  });
+
   app.post('/api/ai/image-to-latex', async (req, res) => {
     try {
       const { imageBase64, mimeType = 'image/png', taskMode = 'auto', compilerMode = 'xelatex' } = req.body as {
@@ -866,6 +1105,8 @@ async function startServer() {
         },
       });
 
+      const dataUrlMatch = imageBase64.match(/^data:([^;]+);base64,/);
+      const resolvedMime = dataUrlMatch?.[1] || mimeType || 'image/png';
       const cleanBase64 = imageBase64.replace(/^data:[^;]+;base64,/, '');
       const prompt = [
         `Convert the attached image into clean, accurate, ready-to-compile LaTeX code.`,
@@ -878,7 +1119,7 @@ async function startServer() {
         model: 'gemini-4-hydrogen',
         contents: {
           parts: [
-            { inlineData: { mimeType, data: cleanBase64 } },
+            { inlineData: { mimeType: resolvedMime, data: cleanBase64 } },
             { text: prompt },
           ],
         },
@@ -888,6 +1129,7 @@ async function startServer() {
           responseMimeType: 'application/json',
           responseSchema: {
             type: Type.OBJECT,
+            required: ['latex'],
             properties: {
               latex: {
                 type: Type.STRING,
@@ -907,7 +1149,10 @@ async function startServer() {
         },
       });
 
-      const raw = (response.text || '{}').trim();
+      const raw = (response.text || '{}')
+        .trim()
+        .replace(/^```(?:json)?\s*/i, '')
+        .replace(/\s*```$/i, '');
       const parsed = JSON.parse(raw) as { latex?: string; packages?: string[]; explanation?: string };
       res.json({
         latex: parsed.latex || '',
@@ -925,15 +1170,21 @@ async function startServer() {
 
   app.post('/api/ai/local-proxy', async (req, res) => {
     try {
-      const { endpointUrl, modelName, imageBase64, prompt } = req.body as {
+      const { endpointUrl, modelName, imageBase64, mimeType = 'image/png', prompt } = req.body as {
         endpointUrl: string;
         modelName: string;
         imageBase64: string;
+        mimeType?: string;
         prompt?: string;
       };
       if (!endpointUrl) {
         return res.status(400).json({ error: 'Local model endpoint URL is required.' });
       }
+      if (!imageBase64) {
+        return res.status(400).json({ error: 'Missing imageBase64 payload.' });
+      }
+      const dataUrlMatch = imageBase64.match(/^data:([^;]+);base64,/);
+      const resolvedMime = dataUrlMatch?.[1] || mimeType || 'image/png';
       const cleanBase64 = imageBase64.replace(/^data:[^;]+;base64,/, '');
       const systemPrompt =
         prompt ||
@@ -949,7 +1200,10 @@ async function startServer() {
                 role: 'user',
                 content: [
                   { type: 'text', text: systemPrompt },
-                  { type: 'image_url', image_url: { url: `data:image/png;base64,${cleanBase64}` } },
+                  {
+                    type: 'image_url',
+                    image_url: { url: `data:${resolvedMime};base64,${cleanBase64}` },
+                  },
                 ],
               },
             ],

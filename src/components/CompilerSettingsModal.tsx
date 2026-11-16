@@ -1,11 +1,13 @@
 import React, { useEffect, useState } from 'react';
-import { X, RefreshCw, CheckCircle2 } from 'lucide-react';
+import { X, RefreshCw, CheckCircle2, PlugZap, AlertTriangle } from 'lucide-react';
 import {
+  BibliographyTool,
+  CompilerInteractionMode,
   CompilerMode,
+  CompilerPasses,
   CompilerSettings,
   DetectedTexInstallation,
-  TexDistribution,
-  TexEdition,
+  OutputFormat,
 } from '../types/latex';
 import { EditorTheme } from '../utils/themes';
 
@@ -19,19 +21,6 @@ interface CompilerSettingsModalProps {
   onRescanLocalTex: () => Promise<void> | void;
 }
 
-const DISTRIBUTIONS: Array<{ id: TexDistribution; name: string; note: string }> = [
-  { id: 'texlive-2025', name: 'TeX Live 2025', note: 'Latest upstream CTAN & XePersian' },
-  { id: 'texlive-2024', name: 'TeX Live 2024 LTS', note: 'Frozen long-term support tree' },
-  { id: 'miktex-24', name: 'MiKTeX 24.1', note: 'On-the-fly CTAN package installer' },
-  { id: 'miktex-portable', name: 'MiKTeX Portable', note: 'Self-contained portable distribution' },
-];
-
-const EDITIONS: Array<{ id: TexEdition; name: string; note: string }> = [
-  { id: 'full', name: 'Full / Complete', note: 'All CTAN, TikZ, XePersian & fonts (~5 GB)' },
-  { id: 'medium', name: 'Medium Scheme', note: 'Standard academic, math & graphics packages' },
-  { id: 'basic', name: 'Basic Scheme', note: 'Minimal LaTeX kernel + essential math only' },
-];
-
 const MODES: Array<{ id: CompilerMode; label: string; desc: string }> = [
   { id: 'xelatex', label: 'XeLaTeX', desc: 'Native UTF-8, OpenType fonts, XePersian & BiDi' },
   { id: 'pdflatex', label: 'PDFLaTeX', desc: 'Fast classic 8-bit TeX direct to PDF' },
@@ -39,6 +28,22 @@ const MODES: Array<{ id: CompilerMode; label: string; desc: string }> = [
   { id: 'latex', label: 'LaTeX (DVI → PDF)', desc: 'Classic DVI/PostScript pipeline for PSTricks' },
   { id: 'latexmk', label: 'Latexmk', desc: 'Multi-pass automated build with BibTeX/Biber' },
 ];
+
+const INTERACTION_MODES: Array<{ id: CompilerInteractionMode; label: string; note: string }> = [
+  { id: 'nonstopmode', label: 'nonstopmode', note: 'Recommended — runs without pausing for input' },
+  { id: 'batchmode', label: 'batchmode', note: 'Minimal console output, suppresses terminal prompt' },
+  { id: 'scrollmode', label: 'scrollmode', note: 'Scrolls past missing-file / mild warnings' },
+  { id: 'errorstopmode', label: 'errorstopmode', note: 'Strict halt on first interactive error' },
+];
+
+interface ConnectionTestResult {
+  connected: boolean;
+  message: string;
+  binaryPath?: string | null;
+  versionBanner?: string | null;
+  kpsewhichAvailable?: boolean;
+  sampleChecked?: boolean;
+}
 
 export const CompilerSettingsModal: React.FC<CompilerSettingsModalProps> = ({
   isOpen,
@@ -51,6 +56,8 @@ export const CompilerSettingsModal: React.FC<CompilerSettingsModalProps> = ({
 }) => {
   const [localDetected, setLocalDetected] = useState<DetectedTexInstallation | null>(detectedTex);
   const [isScanning, setIsScanning] = useState(false);
+  const [isTestingConn, setIsTestingConn] = useState(false);
+  const [connResult, setConnResult] = useState<ConnectionTestResult | null>(null);
 
   useEffect(() => {
     setLocalDetected(detectedTex);
@@ -72,9 +79,35 @@ export const CompilerSettingsModal: React.FC<CompilerSettingsModalProps> = ({
     }
   };
 
+  const handleTestConnection = async () => {
+    setIsTestingConn(true);
+    setConnResult(null);
+    try {
+      const res = await fetch('/api/compiler/test', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          mode: settings.compilerMode,
+          customBinaryPath: settings.customBinaryPath,
+          remoteEndpointUrl: settings.remoteEndpointUrl,
+        }),
+      });
+      const data = (await res.json()) as ConnectionTestResult;
+      setConnResult(data);
+    } catch (err) {
+      setConnResult({
+        connected: false,
+        message: err instanceof Error ? err.message : 'Backend connection check failed.',
+      });
+    } finally {
+      setIsTestingConn(false);
+    }
+  };
+
   useEffect(() => {
     if (!isOpen) return;
     handleScan();
+    setConnResult(null);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isOpen]);
 
@@ -87,7 +120,6 @@ export const CompilerSettingsModal: React.FC<CompilerSettingsModalProps> = ({
     if (!localDetected?.hasNative) return;
     onChange({
       ...settings,
-      distribution: localDetected.detectedDistribution || settings.distribution,
       customBinaryPath: localDetected.detectedBinDir || settings.customBinaryPath,
     });
   };
@@ -96,7 +128,7 @@ export const CompilerSettingsModal: React.FC<CompilerSettingsModalProps> = ({
     <div
       role="dialog"
       aria-modal="true"
-      aria-label="Compiler and TeX Distribution Settings"
+      aria-label="Compiler Settings and Local TeX Connection"
       className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4"
     >
       <div
@@ -112,9 +144,9 @@ export const CompilerSettingsModal: React.FC<CompilerSettingsModalProps> = ({
           style={{ borderColor: theme.ui.border, backgroundColor: theme.ui.surface }}
         >
           <div>
-            <h2 className="text-base font-semibold">Compiler Engine &amp; TeX Distribution</h2>
+            <h2 className="text-base font-semibold">Compiler Settings &amp; Local TeX Backend</h2>
             <p className="text-xs" style={{ color: theme.ui.textMuted }}>
-              Autodetect local TeX Live / MiKTeX installations, choose edition scheme, and engine mode
+              Configure TeX engine, passes, bibliography tool, CLI flags, and local TeX Live / MiKTeX connection
             </p>
           </div>
           <button
@@ -129,23 +161,34 @@ export const CompilerSettingsModal: React.FC<CompilerSettingsModalProps> = ({
         </div>
 
         <div className="p-5 overflow-y-auto space-y-5">
-          {/* Autodetection Panel */}
+          {/* Local TeX Live & MiKTeX Connection & Diagnostics */}
           <div
             className="p-3.5 rounded-lg border space-y-2.5"
             style={{ backgroundColor: theme.ui.surface, borderColor: theme.ui.border }}
           >
             <div className="flex items-center justify-between gap-2 flex-wrap">
               <div>
-                <div className="text-xs font-semibold">
-                  Local TeX Live &amp; MiKTeX Autodetection
+                <div className="text-xs font-semibold flex items-center gap-2">
+                  <span>Local TeX Live / MiKTeX Backend Connection</span>
+                  <span
+                    className="px-1.5 py-0.5 text-[10px] rounded border font-medium"
+                    style={{
+                      borderColor: localDetected?.hasNative ? '#16a34a' : theme.ui.border,
+                      color: localDetected?.hasNative ? '#16a34a' : theme.ui.textMuted,
+                    }}
+                  >
+                    {localDetected?.hasNative
+                      ? `Connected · ${localDetected.detectedFamily || 'Local TeX'}`
+                      : 'Built-in Fallback'}
+                  </span>
                 </div>
-                <div className="text-[11px]" style={{ color: theme.ui.textMuted }}>
+                <div className="text-[11px] mt-0.5" style={{ color: theme.ui.textMuted }}>
                   {localDetected?.hasNative
-                    ? `Detected: ${localDetected.versionBanner || localDetected.detectedDistribution} (${localDetected.detectedBinDir})`
-                    : 'No local TeX Live or MiKTeX binaries detected on host PATH or standard install directories. Built-in typesetter active.'}
+                    ? `Detected: ${localDetected.versionBanner || localDetected.detectedFamily} (${localDetected.detectedBinDir})`
+                    : 'No local TeX Live or MiKTeX binaries detected on PATH or standard directories. Built-in typesetter active.'}
                 </div>
               </div>
-              <div className="flex items-center gap-2">
+              <div className="flex items-center gap-2 flex-wrap">
                 {localDetected?.hasNative && (
                   <button
                     type="button"
@@ -158,9 +201,23 @@ export const CompilerSettingsModal: React.FC<CompilerSettingsModalProps> = ({
                     }}
                   >
                     <CheckCircle2 className="w-3.5 h-3.5" />
-                    Apply Detected
+                    Use Detected Path
                   </button>
                 )}
+                <button
+                  type="button"
+                  disabled={isTestingConn}
+                  onClick={handleTestConnection}
+                  className="inline-flex items-center gap-1.5 px-2.5 py-1 text-xs font-medium rounded border whitespace-nowrap"
+                  style={{
+                    backgroundColor: theme.ui.bg,
+                    borderColor: theme.ui.border,
+                    color: theme.ui.text,
+                  }}
+                >
+                  <PlugZap className="w-3.5 h-3.5" />
+                  {isTestingConn ? 'Testing...' : 'Test Connection'}
+                </button>
                 <button
                   type="button"
                   disabled={isScanning}
@@ -173,10 +230,35 @@ export const CompilerSettingsModal: React.FC<CompilerSettingsModalProps> = ({
                   }}
                 >
                   <RefreshCw className={`w-3.5 h-3.5 ${isScanning ? 'animate-spin' : ''}`} />
-                  Scan Local TeX
+                  Rescan
                 </button>
               </div>
             </div>
+
+            {connResult && (
+              <div
+                className="p-2.5 rounded border text-xs flex items-start gap-2"
+                style={{
+                  backgroundColor: theme.ui.bg,
+                  borderColor: connResult.connected ? '#16a34a' : '#d97706',
+                }}
+              >
+                {connResult.connected ? (
+                  <CheckCircle2 className="w-4 h-4 text-emerald-500 shrink-0 mt-0.5" />
+                ) : (
+                  <AlertTriangle className="w-4 h-4 text-amber-500 shrink-0 mt-0.5" />
+                )}
+                <div className="space-y-0.5">
+                  <div className="font-medium">{connResult.message}</div>
+                  {connResult.binaryPath && (
+                    <div className="text-[11px] font-mono" style={{ color: theme.ui.textMuted }}>
+                      Binary: {connResult.binaryPath}
+                      {connResult.kpsewhichAvailable ? ' · kpsewhich OK' : ''}
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
 
             {foundBinaries.length > 0 && (
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-1.5 pt-1">
@@ -198,73 +280,11 @@ export const CompilerSettingsModal: React.FC<CompilerSettingsModalProps> = ({
             )}
           </div>
 
-          {/* Distribution */}
-          <div>
-            <div className="text-xs font-medium mb-2" style={{ color: theme.ui.textMuted }}>
-              Backend TeX Distribution
-            </div>
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
-              {DISTRIBUTIONS.map((d) => {
-                const selected = settings.distribution === d.id;
-                return (
-                  <button
-                    key={d.id}
-                    type="button"
-                    onClick={() => onChange({ ...settings, distribution: d.id })}
-                    className="text-left p-3 rounded-lg border transition-colors"
-                    style={{
-                      backgroundColor: selected ? theme.ui.surfaceAlt : theme.ui.surface,
-                      borderColor: selected ? theme.ui.accent : theme.ui.border,
-                    }}
-                  >
-                    <div className="text-xs font-semibold">{d.name}</div>
-                    <div className="text-[11px] mt-0.5" style={{ color: theme.ui.textMuted }}>
-                      {d.note}
-                    </div>
-                  </button>
-                );
-              })}
-            </div>
-          </div>
-
-          {/* Edition */}
-          <div>
-            <div className="text-xs font-medium mb-2" style={{ color: theme.ui.textMuted }}>
-              Distribution Edition / Package Scheme
-            </div>
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
-              {EDITIONS.map((ed) => {
-                const selected = settings.edition === ed.id;
-                return (
-                  <button
-                    key={ed.id}
-                    type="button"
-                    onClick={() => onChange({ ...settings, edition: ed.id })}
-                    className="text-left p-3 rounded-lg border transition-colors"
-                    style={{
-                      backgroundColor: selected ? theme.ui.surfaceAlt : theme.ui.surface,
-                      borderColor: selected ? theme.ui.accent : theme.ui.border,
-                    }}
-                  >
-                    <div className="text-xs font-semibold">{ed.name}</div>
-                    <div className="text-[11px] mt-0.5" style={{ color: theme.ui.textMuted }}>
-                      {ed.note}
-                    </div>
-                  </button>
-                );
-              })}
-            </div>
-          </div>
-
           {/* Engine Mode */}
           <div>
-            <label
-              htmlFor="compiler-mode-select"
-              className="block text-xs font-medium mb-2"
-              style={{ color: theme.ui.textMuted }}
-            >
-              Compiler Engine Mode
-            </label>
+            <div className="text-xs font-semibold mb-2" style={{ color: theme.ui.textMuted }}>
+              Compiler Engine
+            </div>
             <div className="grid grid-cols-2 sm:grid-cols-5 gap-2">
               {MODES.map((m) => {
                 const selected = settings.compilerMode === m.id;
@@ -274,7 +294,7 @@ export const CompilerSettingsModal: React.FC<CompilerSettingsModalProps> = ({
                     type="button"
                     title={m.desc}
                     onClick={() => onChange({ ...settings, compilerMode: m.id })}
-                    className="py-2 px-2.5 text-center rounded-lg border text-xs font-medium transition-colors"
+                    className="py-2 px-2.5 text-center rounded-lg border text-xs font-semibold transition-colors"
                     style={{
                       backgroundColor: selected ? theme.ui.accent : theme.ui.surface,
                       borderColor: selected ? theme.ui.accent : theme.ui.border,
@@ -288,14 +308,221 @@ export const CompilerSettingsModal: React.FC<CompilerSettingsModalProps> = ({
             </div>
           </div>
 
-          {/* Advanced paths & flags */}
+          {/* Common TeX Compiler Options */}
+          <div
+            className="p-3.5 rounded-lg border space-y-3.5"
+            style={{ backgroundColor: theme.ui.surface, borderColor: theme.ui.border }}
+          >
+            <div className="text-xs font-semibold">Build Pipeline &amp; Common Flags</div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <div>
+                <label
+                  htmlFor="compiler-interaction-mode"
+                  className="block text-xs font-medium mb-1"
+                  style={{ color: theme.ui.textMuted }}
+                >
+                  Interaction Mode (<code className="font-mono">-interaction</code>)
+                </label>
+                <select
+                  id="compiler-interaction-mode"
+                  value={settings.interactionMode}
+                  onChange={(e) =>
+                    onChange({
+                      ...settings,
+                      interactionMode: e.target.value as CompilerInteractionMode,
+                    })
+                  }
+                  className="w-full px-2.5 py-1.5 text-xs rounded border"
+                  style={{
+                    backgroundColor: theme.ui.bg,
+                    borderColor: theme.ui.border,
+                    color: theme.ui.text,
+                  }}
+                >
+                  {INTERACTION_MODES.map((m) => (
+                    <option key={m.id} value={m.id}>
+                      {m.label} — {m.note}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              <div>
+                <label
+                  htmlFor="compiler-passes"
+                  className="block text-xs font-medium mb-1"
+                  style={{ color: theme.ui.textMuted }}
+                >
+                  Compilation Passes (Cross-Refs / TOC)
+                </label>
+                <select
+                  id="compiler-passes"
+                  value={settings.compilePasses}
+                  onChange={(e) =>
+                    onChange({
+                      ...settings,
+                      compilePasses: e.target.value as CompilerPasses,
+                    })
+                  }
+                  className="w-full px-2.5 py-1.5 text-xs rounded border"
+                  style={{
+                    backgroundColor: theme.ui.bg,
+                    borderColor: theme.ui.border,
+                    color: theme.ui.text,
+                  }}
+                >
+                  <option value="auto">Auto (2–3 passes when refs/bib detected)</option>
+                  <option value="1">Single Pass (Fastest)</option>
+                  <option value="2">2 Passes (TOC &amp; \ref)</option>
+                  <option value="3">3 Passes (Full Citation / Label Settlement)</option>
+                </select>
+              </div>
+
+              <div>
+                <label
+                  htmlFor="compiler-bib-tool"
+                  className="block text-xs font-medium mb-1"
+                  style={{ color: theme.ui.textMuted }}
+                >
+                  Bibliography Processor
+                </label>
+                <select
+                  id="compiler-bib-tool"
+                  value={settings.bibliographyTool}
+                  onChange={(e) =>
+                    onChange({
+                      ...settings,
+                      bibliographyTool: e.target.value as BibliographyTool,
+                    })
+                  }
+                  className="w-full px-2.5 py-1.5 text-xs rounded border"
+                  style={{
+                    backgroundColor: theme.ui.bg,
+                    borderColor: theme.ui.border,
+                    color: theme.ui.text,
+                  }}
+                >
+                  <option value="auto">Auto-detect (BibTeX / Biber)</option>
+                  <option value="bibtex">BibTeX</option>
+                  <option value="biber">Biber (biblatex)</option>
+                  <option value="none">None (Skip bibliography step)</option>
+                </select>
+              </div>
+
+              <div>
+                <label
+                  htmlFor="compiler-output-format"
+                  className="block text-xs font-medium mb-1"
+                  style={{ color: theme.ui.textMuted }}
+                >
+                  Output Format
+                </label>
+                <select
+                  id="compiler-output-format"
+                  value={settings.outputFormat}
+                  onChange={(e) =>
+                    onChange({
+                      ...settings,
+                      outputFormat: e.target.value as OutputFormat,
+                    })
+                  }
+                  className="w-full px-2.5 py-1.5 text-xs rounded border"
+                  style={{
+                    backgroundColor: theme.ui.bg,
+                    borderColor: theme.ui.border,
+                    color: theme.ui.text,
+                  }}
+                >
+                  <option value="pdf">PDF (Standard)</option>
+                  <option value="dvi">DVI / XDV (Intermediate)</option>
+                  <option value="draft">Draft Mode (Fast syntax check)</option>
+                </select>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5 pt-1">
+              <label className="inline-flex items-center gap-2 text-xs cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={settings.synctex}
+                  onChange={(e) => onChange({ ...settings, synctex: e.target.checked })}
+                />
+                <span>
+                  Enable SyncTeX (<code className="font-mono">-synctex=1</code>)
+                </span>
+              </label>
+
+              <label className="inline-flex items-center gap-2 text-xs cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={settings.haltOnError}
+                  onChange={(e) => onChange({ ...settings, haltOnError: e.target.checked })}
+                />
+                <span>
+                  Halt on First Error (<code className="font-mono">-halt-on-error</code>)
+                </span>
+              </label>
+
+              <label className="inline-flex items-center gap-2 text-xs cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={settings.fileLineError}
+                  onChange={(e) => onChange({ ...settings, fileLineError: e.target.checked })}
+                />
+                <span>
+                  File:Line Diagnostics (<code className="font-mono">-file-line-error</code>)
+                </span>
+              </label>
+
+              <label className="inline-flex items-center gap-2 text-xs cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={settings.shellEscape}
+                  onChange={(e) => onChange({ ...settings, shellEscape: e.target.checked })}
+                />
+                <span>
+                  Allow Shell Escape (<code className="font-mono">-shell-escape</code>)
+                </span>
+              </label>
+            </div>
+
+            <div>
+              <label
+                htmlFor="compiler-extra-args"
+                className="block text-xs font-medium mb-1"
+                style={{ color: theme.ui.textMuted }}
+              >
+                Extra TeX CLI Flags (Optional)
+              </label>
+              <input
+                id="compiler-extra-args"
+                type="text"
+                value={settings.extraArgs}
+                onChange={(e) => onChange({ ...settings, extraArgs: e.target.value })}
+                placeholder="-recorder -max-print-line=120"
+                className="w-full px-2.5 py-1.5 text-xs font-mono rounded border"
+                style={{
+                  backgroundColor: theme.ui.bg,
+                  borderColor: theme.ui.border,
+                  color: theme.ui.text,
+                }}
+              />
+            </div>
+          </div>
+
+          {/* Paths */}
           <div
             className="p-3.5 rounded-lg border space-y-3"
             style={{ backgroundColor: theme.ui.surface, borderColor: theme.ui.border }}
           >
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               <div>
-                <label htmlFor="tex-bin-path" className="block text-xs font-medium mb-1" style={{ color: theme.ui.textMuted }}>
+                <label
+                  htmlFor="tex-bin-path"
+                  className="block text-xs font-medium mb-1"
+                  style={{ color: theme.ui.textMuted }}
+                >
                   Local TeX Live / MiKTeX Bin Directory (Optional)
                 </label>
                 <input
@@ -303,7 +530,7 @@ export const CompilerSettingsModal: React.FC<CompilerSettingsModalProps> = ({
                   type="text"
                   value={settings.customBinaryPath}
                   onChange={(e) => onChange({ ...settings, customBinaryPath: e.target.value })}
-                  placeholder="/usr/local/texlive/2025/bin/x86_64-linux"
+                  placeholder="/usr/local/texlive/2026/bin/x86_64-linux"
                   className="w-full px-2.5 py-1.5 text-xs font-mono rounded border"
                   style={{
                     backgroundColor: theme.ui.bg,
@@ -313,7 +540,11 @@ export const CompilerSettingsModal: React.FC<CompilerSettingsModalProps> = ({
                 />
               </div>
               <div>
-                <label htmlFor="remote-tex-url" className="block text-xs font-medium mb-1" style={{ color: theme.ui.textMuted }}>
+                <label
+                  htmlFor="remote-tex-url"
+                  className="block text-xs font-medium mb-1"
+                  style={{ color: theme.ui.textMuted }}
+                >
                   Remote TeX Compiler URL (Optional)
                 </label>
                 <input
@@ -330,29 +561,6 @@ export const CompilerSettingsModal: React.FC<CompilerSettingsModalProps> = ({
                   }}
                 />
               </div>
-            </div>
-
-            <div className="flex items-center gap-6 pt-1">
-              <label className="inline-flex items-center gap-2 text-xs cursor-pointer">
-                <input
-                  type="checkbox"
-                  checked={settings.synctex}
-                  onChange={(e) => onChange({ ...settings, synctex: e.target.checked })}
-                />
-                <span>
-                  Enable SyncTeX (<code className="font-mono">-synctex=1</code>)
-                </span>
-              </label>
-              <label className="inline-flex items-center gap-2 text-xs cursor-pointer">
-                <input
-                  type="checkbox"
-                  checked={settings.shellEscape}
-                  onChange={(e) => onChange({ ...settings, shellEscape: e.target.checked })}
-                />
-                <span>
-                  Allow Shell Escape (<code className="font-mono">-shell-escape</code>)
-                </span>
-              </label>
             </div>
           </div>
         </div>

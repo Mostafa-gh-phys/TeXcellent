@@ -2,8 +2,6 @@ import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
   Play,
   PanelLeft,
-  Plus,
-  Trash2,
   FileCode2,
   Terminal,
   ChevronDown,
@@ -26,7 +24,18 @@ import {
 } from './types/latex';
 import { EDITOR_THEMES } from './utils/themes';
 import { EDITOR_FONTS } from './utils/editorFonts';
-import { createInitialProject, ProjectTemplate } from './utils/defaultProjects';
+import {
+  createInitialProject,
+  migrateLegacyDefaultProject,
+  ProjectTemplate,
+} from './utils/defaultProjects';
+import { DEFAULT_COMPILER_SETTINGS, mergeCompilerSettings } from './utils/compilerArgs';
+import {
+  inferFileLanguage,
+  normalizeProjectFilePath,
+  stripSharedRootFolder,
+} from './utils/fileTree';
+import { markdownToLatex } from './utils/latexMarkdown';
 import { LatexCodeEditor } from './components/LatexCodeEditor';
 import { PdfPreviewPane } from './components/PdfPreviewPane';
 import { SmartAiModal } from './components/SmartAiModal';
@@ -35,8 +44,10 @@ import { CompilerSettingsModal } from './components/CompilerSettingsModal';
 import { FileModal } from './components/FileModal';
 import { SettingsModal } from './components/SettingsModal';
 import { TeXcellentLogo } from './components/TeXcellentLogo';
+import { FileTreeSidebar } from './components/FileTreeSidebar';
 
 const STORAGE_PROJECT_KEY = 'texcellent_project_v1';
+const STORAGE_TABS_KEY = 'texcellent_open_tabs_v1';
 const STORAGE_THEME_KEY = 'texcellent_theme_v1';
 const STORAGE_FONT_KEY = 'texcellent_font_v1';
 const STORAGE_FONT_SIZE_KEY = 'texcellent_font_size_v1';
@@ -51,16 +62,6 @@ const LEGACY_KEYS: Record<string, string> = {
   [STORAGE_FONT_SIZE_KEY]: 'texmatch_font_size_v1',
   [STORAGE_COMPILER_KEY]: 'texmatch_compiler_v1',
   [STORAGE_SYNC_KEY]: 'texmatch_sync_v1',
-};
-
-const DEFAULT_COMPILER_SETTINGS: CompilerSettings = {
-  distribution: 'texlive-2025',
-  edition: 'full',
-  compilerMode: 'xelatex',
-  customBinaryPath: '',
-  remoteEndpointUrl: '',
-  shellEscape: false,
-  synctex: true,
 };
 
 const DEFAULT_SYNC_CONFIG: SyncConfig = {
@@ -86,7 +87,9 @@ const DEFAULT_SYNC_CONFIG: SyncConfig = {
 
 function loadJson<T>(key: string, fallback: T): T {
   try {
-    const raw = localStorage.getItem(key) ?? (LEGACY_KEYS[key] ? localStorage.getItem(LEGACY_KEYS[key]) : null);
+    const raw =
+      localStorage.getItem(key) ??
+      (LEGACY_KEYS[key] ? localStorage.getItem(LEGACY_KEYS[key]) : null);
     if (!raw) return fallback;
     return JSON.parse(raw) as T;
   } catch {
@@ -100,11 +103,18 @@ export default function App() {
     new URLSearchParams(window.location.search).get('preview') === 'external';
 
   const [project, setProject] = useState<LatexProject>(() =>
-    loadJson<LatexProject>(STORAGE_PROJECT_KEY, createInitialProject())
+    migrateLegacyDefaultProject(loadJson<LatexProject>(STORAGE_PROJECT_KEY, createInitialProject()))
   );
   const [activeFileId, setActiveFileId] = useState<string>(
     () => project.mainFileId || project.files[0]?.id || 'main-tex'
   );
+  const [openTabIds, setOpenTabIds] = useState<string[]>(() => {
+    const saved = loadJson<string[]>(STORAGE_TABS_KEY, []);
+    const valid = saved.filter((id) => project.files.some((f) => f.id === id));
+    if (valid.length > 0) return valid;
+    const initial = [project.mainFileId || project.files[0]?.id].filter(Boolean) as string[];
+    return initial;
+  });
   const [themeId, setThemeId] = useState<ThemeId>(
     () => loadJson<ThemeId>(STORAGE_THEME_KEY, 'github-light')
   );
@@ -114,8 +124,8 @@ export default function App() {
   const [editorFontSize, setEditorFontSize] = useState<number>(
     () => loadJson<number>(STORAGE_FONT_SIZE_KEY, 14)
   );
-  const [compilerSettings, setCompilerSettings] = useState<CompilerSettings>(
-    () => loadJson<CompilerSettings>(STORAGE_COMPILER_KEY, DEFAULT_COMPILER_SETTINGS)
+  const [compilerSettings, setCompilerSettings] = useState<CompilerSettings>(() =>
+    mergeCompilerSettings(loadJson<Partial<CompilerSettings>>(STORAGE_COMPILER_KEY, DEFAULT_COMPILER_SETTINGS))
   );
   const [detectedTex, setDetectedTex] = useState<DetectedTexInstallation | null>(null);
   const [syncConfig, setSyncConfig] = useState<SyncConfig>(
@@ -144,12 +154,11 @@ export default function App() {
   const [activeModal, setActiveModal] = useState<
     null | 'file' | 'smart' | 'sync' | 'compiler' | 'settings' | 'external-fallback'
   >(null);
-  const [newFileName, setNewFileName] = useState('');
-  const [isAddingFile, setIsAddingFile] = useState(false);
 
   const editorActionsRef = useRef<{ insertAtCursor: (snippet: string) => void } | null>(null);
   const splitContainerRef = useRef<HTMLDivElement | null>(null);
   const isResizingRef = useRef(false);
+  const sidebarFolderInputRef = useRef<HTMLInputElement | null>(null);
 
   const theme = EDITOR_THEMES[themeId] || EDITOR_THEMES['github-light'];
   const editorFont = EDITOR_FONTS[editorFontId] || EDITOR_FONTS.jetbrains;
@@ -157,6 +166,27 @@ export default function App() {
     project.files.find((f) => f.id === activeFileId) || project.files[0];
   const mainFile =
     project.files.find((f) => f.id === project.mainFileId) || project.files[0];
+
+  const openFileTab = useCallback((fileId: string) => {
+    setActiveFileId(fileId);
+    setOpenTabIds((prev) => (prev.includes(fileId) ? prev : [...prev, fileId]));
+  }, []);
+
+  const closeFileTab = useCallback(
+    (fileId: string) => {
+      setOpenTabIds((prev) => {
+        if (prev.length <= 1) return prev;
+        const idx = prev.indexOf(fileId);
+        const next = prev.filter((id) => id !== fileId);
+        if (activeFileId === fileId && next.length > 0) {
+          const replacement = next[Math.max(0, idx - 1)] || next[0];
+          setActiveFileId(replacement);
+        }
+        return next;
+      });
+    },
+    [activeFileId]
+  );
 
   // Persist workspace state
   useEffect(() => {
@@ -166,6 +196,14 @@ export default function App() {
       // ignore storage quota errors
     }
   }, [project]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(STORAGE_TABS_KEY, JSON.stringify(openTabIds));
+    } catch {
+      // ignore
+    }
+  }, [openTabIds]);
 
   useEffect(() => {
     try {
@@ -260,12 +298,17 @@ export default function App() {
           mainFileName: mainFile?.name || 'main.tex',
           files: project.files,
           mode: compilerSettings.compilerMode,
-          distribution: compilerSettings.distribution,
-          edition: compilerSettings.edition,
           customBinaryPath: compilerSettings.customBinaryPath,
           remoteEndpointUrl: compilerSettings.remoteEndpointUrl,
           shellEscape: compilerSettings.shellEscape,
           synctex: compilerSettings.synctex,
+          interactionMode: compilerSettings.interactionMode,
+          compilePasses: compilerSettings.compilePasses,
+          bibliographyTool: compilerSettings.bibliographyTool,
+          outputFormat: compilerSettings.outputFormat,
+          fileLineError: compilerSettings.fileLineError,
+          haltOnError: compilerSettings.haltOnError,
+          extraArgs: compilerSettings.extraArgs,
         }),
       });
       const data = (await res.json()) as CompileResult;
@@ -291,7 +334,6 @@ export default function App() {
       if (data.hasNative) {
         setCompilerSettings((prev) => ({
           ...prev,
-          distribution: data.detectedDistribution || prev.distribution,
           customBinaryPath: prev.customBinaryPath || data.detectedBinDir || '',
         }));
       }
@@ -340,18 +382,18 @@ export default function App() {
     }));
   };
 
-  const handleAddFile = (e: React.FormEvent) => {
-    e.preventDefault();
-    const clean = newFileName.trim();
-    if (!clean) return;
+  const handleCreateFile = useCallback((rawPath: string, content?: string) => {
+    const clean = normalizeProjectFilePath(rawPath);
     const finalName = /\.(tex|bib|sty|cls)$/i.test(clean) ? clean : `${clean}.tex`;
     const newFile: ProjectFile = {
-      id: `file-${Date.now()}`,
+      id: `file-${Date.now()}-${Math.random().toString(36).slice(2, 5)}`,
       name: finalName,
-      content: finalName.endsWith('.bib')
-        ? `@article{key2026,\n  author = {Author},\n  title = {Title},\n  year = {2026}\n}\n`
-        : `% ${finalName}\n\\section{New Section}\n`,
-      language: finalName.endsWith('.bib') ? 'bibtex' : finalName.endsWith('.sty') || finalName.endsWith('.cls') ? 'style' : 'latex',
+      content:
+        content ??
+        (finalName.endsWith('.bib')
+          ? `@article{key2026,\n  author = {Author},\n  title = {Title},\n  year = {2026}\n}\n`
+          : `% ${finalName}\n\\section{New Section}\n`),
+      language: inferFileLanguage(finalName),
       updatedAt: new Date().toISOString(),
     };
     setProject((prev) => ({
@@ -360,9 +402,8 @@ export default function App() {
       updatedAt: new Date().toISOString(),
     }));
     setActiveFileId(newFile.id);
-    setNewFileName('');
-    setIsAddingFile(false);
-  };
+    setOpenTabIds((prev) => [...prev, newFile.id]);
+  }, []);
 
   const handleDeleteFile = (fileId: string) => {
     if (project.files.length <= 1 || fileId === project.mainFileId) return;
@@ -372,6 +413,10 @@ export default function App() {
       files: remaining,
       updatedAt: new Date().toISOString(),
     }));
+    setOpenTabIds((prev) => {
+      const filtered = prev.filter((id) => id !== fileId);
+      return filtered.length > 0 ? filtered : [remaining[0].id];
+    });
     if (activeFileId === fileId) {
       setActiveFileId(remaining[0].id);
     }
@@ -385,11 +430,10 @@ export default function App() {
     };
     setProject(nextProject);
     setActiveFileId(nextProject.mainFileId);
+    setOpenTabIds([nextProject.mainFileId]);
     setCompilerSettings((prev) => ({
       ...prev,
       compilerMode: tpl.project.compilerMode,
-      distribution: tpl.project.distribution,
-      edition: tpl.project.edition,
     }));
     setTimeout(() => {
       handleCompile();
@@ -398,43 +442,100 @@ export default function App() {
 
   const handleImportFiles = (incoming: ProjectFile[]) => {
     if (!incoming.length) return;
+    let firstSelectedId = incoming[0].id;
+    const openIds: string[] = [];
+
     setProject((prev) => {
       const merged = [...prev.files];
       for (const file of incoming) {
-        const idx = merged.findIndex((f) => f.name === file.name);
+        const cleanName = normalizeProjectFilePath(file.name);
+        const idx = merged.findIndex((f) => f.name === cleanName);
         if (idx !== -1) {
           merged[idx] = { ...merged[idx], content: file.content, updatedAt: file.updatedAt };
+          openIds.push(merged[idx].id);
+          if (file.id === incoming[0].id) firstSelectedId = merged[idx].id;
         } else {
-          merged.push(file);
+          const added = { ...file, name: cleanName };
+          merged.push(added);
+          openIds.push(added.id);
         }
       }
       return { ...prev, files: merged, updatedAt: new Date().toISOString() };
     });
-    setActiveFileId(incoming[0].id);
+
+    const mainCandidate = incoming.find((f) => /(^|\/)main\.tex$/i.test(f.name));
+    setActiveFileId(mainCandidate ? mainCandidate.id : firstSelectedId);
+    setOpenTabIds((prev) => {
+      const next = [...prev];
+      for (const id of openIds.slice(0, 8)) {
+        if (!next.includes(id)) next.push(id);
+      }
+      return next;
+    });
   };
 
-  const handleCreateFile = (finalName: string, content?: string) => {
-    const newFile: ProjectFile = {
-      id: `file-${Date.now()}-${Math.random().toString(36).slice(2, 5)}`,
-      name: finalName,
-      content:
-        content ??
-        (finalName.endsWith('.bib')
-          ? `@article{key2026,\n  author = {Author},\n  title = {Title},\n  year = {2026}\n}\n`
-          : `% ${finalName}\n\\section{New Section}\n`),
-      language: finalName.endsWith('.bib')
-        ? 'bibtex'
-        : finalName.endsWith('.sty') || finalName.endsWith('.cls')
-          ? 'style'
-          : 'latex',
+  const handleOpenFolderSelection = async (fileList: FileList | null) => {
+    if (!fileList || fileList.length === 0) return;
+    const rawFiles = Array.from(fileList).filter((f) => {
+      const rel = (f as File & { webkitRelativePath?: string }).webkitRelativePath || f.name;
+      return /\.(tex|bib|sty|cls|md)$/i.test(rel);
+    });
+    if (rawFiles.length === 0) return;
+
+    const rawPaths = rawFiles.map(
+      (f) => (f as File & { webkitRelativePath?: string }).webkitRelativePath || f.name
+    );
+    const folderTitle =
+      rawPaths[0].includes('/') ? rawPaths[0].split('/')[0] : project.name;
+    const strippedPaths = stripSharedRootFolder(rawPaths);
+
+    const nextFiles: ProjectFile[] = [];
+    for (let i = 0; i < rawFiles.length; i++) {
+      const f = rawFiles[i];
+      const relPath = strippedPaths[i];
+      const text = await f.text();
+      if (/\.md$/i.test(relPath)) {
+        const texName = relPath.replace(/\.md$/i, '.tex');
+        nextFiles.push({
+          id: `dir-${Date.now()}-${i}`,
+          name: texName,
+          content: markdownToLatex(text, {
+            includePreamble: true,
+            title: texName.replace(/\.tex$/i, ''),
+          }),
+          language: 'latex',
+          updatedAt: new Date().toISOString(),
+        });
+      } else {
+        nextFiles.push({
+          id: `dir-${Date.now()}-${i}`,
+          name: relPath,
+          content: text,
+          language: inferFileLanguage(relPath),
+          updatedAt: new Date().toISOString(),
+        });
+      }
+    }
+
+    if (nextFiles.length === 0) return;
+    const primaryFile =
+      nextFiles.find((f) => f.name.toLowerCase() === 'main.tex') ||
+      nextFiles.find((f) => f.name.toLowerCase().endsWith('.tex')) ||
+      nextFiles[0];
+
+    setProject({
+      id: `proj-folder-${Date.now()}`,
+      name: folderTitle || 'Opened Folder',
+      mainFileId: primaryFile.id,
+      compilerMode: compilerSettings.compilerMode,
+      files: nextFiles,
       updatedAt: new Date().toISOString(),
-    };
-    setProject((prev) => ({
-      ...prev,
-      files: [...prev.files, newFile],
-      updatedAt: new Date().toISOString(),
-    }));
-    setActiveFileId(newFile.id);
+    });
+    setActiveFileId(primaryFile.id);
+    setOpenTabIds([primaryFile.id]);
+    setTimeout(() => {
+      handleCompile();
+    }, 80);
   };
 
   const handleNewBlankProject = (projectName: string) => {
@@ -458,8 +559,6 @@ Write your document here.
       name: projectName,
       mainFileId: mainId,
       compilerMode: compilerSettings.compilerMode,
-      distribution: compilerSettings.distribution,
-      edition: compilerSettings.edition,
       updatedAt: new Date().toISOString(),
       files: [
         {
@@ -473,6 +572,7 @@ Write your document here.
     };
     setProject(nextProject);
     setActiveFileId(mainId);
+    setOpenTabIds([mainId]);
     setTimeout(() => {
       handleCompile();
     }, 60);
@@ -502,6 +602,16 @@ Write your document here.
     );
   }
 
+  const openTabFiles = openTabIds
+    .map((id) => project.files.find((f) => f.id === id))
+    .filter((f): f is ProjectFile => Boolean(f));
+
+  const backendConnectionLabel = detectedTex?.hasNative
+    ? `Local ${detectedTex.detectedFamily || 'TeX'}`
+    : compilerSettings.remoteEndpointUrl?.trim()
+      ? 'Remote TeX'
+      : 'Built-in';
+
   return (
     <div
       className="h-screen w-screen flex flex-col overflow-hidden"
@@ -510,7 +620,17 @@ Write your document here.
         color: theme.ui.text,
       }}
     >
-      {/* Top Bar: Left = Navigation Tabs · Center = TeXcellent Logo & Name · Right = Compile CTA */}
+      {/* Hidden folder picker for sidebar Open Folder button */}
+      <input
+        ref={sidebarFolderInputRef}
+        type="file"
+        multiple
+        {...({ webkitdirectory: '', directory: '' } as React.InputHTMLAttributes<HTMLInputElement>)}
+        className="hidden"
+        onChange={(e) => handleOpenFolderSelection(e.target.files)}
+      />
+
+      {/* Top Bar: Left = Navigation Tabs · Center = {TeXcellent} Logo · Right = Compile CTA */}
       <header
         className="flex md:grid md:grid-cols-3 items-center justify-between gap-4 px-5 py-2.5 border-b shrink-0"
         style={{
@@ -567,11 +687,7 @@ Write your document here.
           aria-label="TeXcellent"
           className="inline-flex items-center justify-center whitespace-nowrap shrink-0 md:justify-self-center hover:opacity-90 transition-opacity"
         >
-          <TeXcellentLogo
-            accentColor={theme.ui.accent}
-            textColor={theme.ui.text}
-            height={40}
-          />
+          <TeXcellentLogo isDark={theme.isDark} height={42} />
         </a>
 
         <div className="flex items-center justify-self-end shrink-0">
@@ -618,7 +734,7 @@ Write your document here.
             <PanelLeft className="w-3.5 h-3.5" />
           </button>
 
-          <span className="hidden sm:inline text-xs font-semibold truncate max-w-[200px]" title={project.name}>
+          <span className="hidden sm:inline text-xs font-semibold truncate max-w-[220px]" title={project.name}>
             {project.name}
           </span>
 
@@ -698,19 +814,23 @@ Write your document here.
             </select>
           </div>
 
-          {/* Distribution & Edition Quick Display Button */}
+          {/* Local Backend Status Trigger (opens Compiler settings) */}
           <button
             type="button"
             onClick={() => setActiveModal('compiler')}
-            className="hidden sm:inline-flex items-center px-2.5 py-1 text-xs font-semibold rounded border whitespace-nowrap"
+            className="hidden sm:inline-flex items-center gap-1.5 px-2.5 py-1 text-xs font-semibold rounded border whitespace-nowrap"
             style={{
               backgroundColor: theme.ui.bg,
               borderColor: theme.ui.border,
-              color: theme.ui.textMuted,
+              color: detectedTex?.hasNative ? '#16a34a' : theme.ui.textMuted,
             }}
+            title="Check local TeX Live / MiKTeX backend connection & compiler flags"
           >
-            {compilerSettings.distribution.startsWith('miktex') ? 'MiKTeX' : 'TeX Live'} ·{' '}
-            {compilerSettings.edition.charAt(0).toUpperCase() + compilerSettings.edition.slice(1)}
+            <span
+              className="w-1.5 h-1.5 rounded-full"
+              style={{ backgroundColor: detectedTex?.hasNative ? '#16a34a' : theme.ui.accent }}
+            />
+            {backendConnectionLabel}
           </button>
 
           {/* Preview Layout Switch (Desktop) */}
@@ -775,104 +895,18 @@ Write your document here.
 
       {/* Main Split Workspace */}
       <main className="flex-1 flex min-h-0 overflow-hidden">
-        {/* Project Files Sidebar */}
+        {/* Project Files Tree Sidebar */}
         {showSidebar && (
-          <aside
-            aria-label="Project Files"
-            className="w-52 border-r flex flex-col shrink-0 hidden sm:flex"
-            style={{
-              backgroundColor: theme.ui.surface,
-              borderColor: theme.ui.border,
-            }}
-          >
-            <div
-              className="flex items-center justify-between px-3 py-2 border-b"
-              style={{ borderColor: theme.ui.border }}
-            >
-              <span className="text-xs font-semibold" style={{ color: theme.ui.textMuted }}>
-                Project Files
-              </span>
-              <button
-                type="button"
-                aria-label="New project file"
-                onClick={() => setIsAddingFile((v) => !v)}
-                className="p-1 rounded hover:opacity-75"
-                style={{ color: theme.ui.textMuted }}
-              >
-                <Plus className="w-3.5 h-3.5" />
-              </button>
-            </div>
-
-            {isAddingFile && (
-              <form
-                onSubmit={handleAddFile}
-                className="p-2 border-b flex gap-1"
-                style={{ borderColor: theme.ui.border }}
-              >
-                <input
-                  type="text"
-                  aria-label="New filename"
-                  value={newFileName}
-                  onChange={(e) => setNewFileName(e.target.value)}
-                  placeholder="chapter1.tex"
-                  autoFocus
-                  className="flex-1 min-w-0 px-2 py-1 text-xs font-mono rounded border"
-                  style={{
-                    backgroundColor: theme.ui.bg,
-                    borderColor: theme.ui.border,
-                    color: theme.ui.text,
-                  }}
-                />
-                <button
-                  type="submit"
-                  className="px-2 py-1 text-xs font-medium rounded"
-                  style={{ backgroundColor: theme.ui.accent, color: theme.ui.accentFg }}
-                >
-                  Add
-                </button>
-              </form>
-            )}
-
-            <div className="flex-1 overflow-y-auto p-1.5 space-y-0.5">
-              {project.files.map((file) => {
-                const isActive = file.id === activeFile?.id;
-                const isMain = file.id === project.mainFileId;
-                return (
-                  <div
-                    key={file.id}
-                    className="group flex items-center justify-between rounded-md px-2 py-1.5"
-                    style={{
-                      backgroundColor: isActive ? theme.ui.surfaceAlt : 'transparent',
-                    }}
-                  >
-                    <button
-                      type="button"
-                      onClick={() => setActiveFileId(file.id)}
-                      className="flex items-center gap-2 text-left text-xs min-w-0 flex-1"
-                      style={{
-                        color: isActive ? theme.ui.text : theme.ui.textMuted,
-                        fontWeight: isActive ? 600 : 400,
-                      }}
-                    >
-                      <FileCode2 className="w-3.5 h-3.5 shrink-0" />
-                      <span className="truncate font-mono">{file.name}</span>
-                    </button>
-                    {!isMain && project.files.length > 1 && (
-                      <button
-                        type="button"
-                        aria-label={`Delete ${file.name}`}
-                        onClick={() => handleDeleteFile(file.id)}
-                        className="opacity-0 group-hover:opacity-100 p-0.5 rounded hover:text-red-500"
-                        style={{ color: theme.ui.textMuted }}
-                      >
-                        <Trash2 className="w-3 h-3" />
-                      </button>
-                    )}
-                  </div>
-                );
-              })}
-            </div>
-          </aside>
+          <FileTreeSidebar
+            theme={theme}
+            files={project.files}
+            mainFileId={project.mainFileId}
+            activeFileId={activeFile?.id || ''}
+            onSelectFile={openFileTab}
+            onAddFile={(filePath) => handleCreateFile(filePath)}
+            onDeleteFile={handleDeleteFile}
+            onOpenFolderClick={() => sidebarFolderInputRef.current?.click()}
+          />
         )}
 
         {/* Editor + Beside Preview Split */}
@@ -889,6 +923,72 @@ Write your document here.
                 : undefined
             }
           >
+            {/* Open Files Multi-Tab Bar */}
+            {openTabFiles.length > 0 && (
+              <div
+                role="tablist"
+                aria-label="Open editor tabs"
+                className="flex items-center border-b overflow-x-auto shrink-0"
+                style={{
+                  backgroundColor: theme.ui.surface,
+                  borderColor: theme.ui.border,
+                }}
+              >
+                {openTabFiles.map((tabFile) => {
+                  const isTabActive = tabFile.id === activeFile?.id;
+                  return (
+                    <div
+                      key={tabFile.id}
+                      role="presentation"
+                      onMouseDown={(e) => {
+                        if (e.button === 1 && openTabFiles.length > 1) {
+                          e.preventDefault();
+                          closeFileTab(tabFile.id);
+                        }
+                      }}
+                      className="group flex items-center shrink-0"
+                      style={{
+                        backgroundColor: isTabActive ? theme.ui.bg : 'transparent',
+                        borderRightWidth: '1px',
+                        borderRightStyle: 'solid',
+                        borderRightColor: theme.ui.border,
+                        borderBottomWidth: '2px',
+                        borderBottomStyle: 'solid',
+                        borderBottomColor: isTabActive ? theme.ui.accent : 'transparent',
+                      }}
+                    >
+                      <button
+                        type="button"
+                        role="tab"
+                        aria-selected={isTabActive}
+                        onClick={() => openFileTab(tabFile.id)}
+                        title={tabFile.name}
+                        className="flex items-center gap-1.5 pl-3 pr-1.5 py-1.5 text-xs font-mono whitespace-nowrap"
+                        style={{
+                          color: isTabActive ? theme.ui.text : theme.ui.textMuted,
+                          fontWeight: isTabActive ? 600 : 500,
+                        }}
+                      >
+                        <FileCode2 className="w-3 h-3 shrink-0 opacity-75" />
+                        <span>{tabFile.name}</span>
+                      </button>
+                      {openTabFiles.length > 1 && (
+                        <button
+                          type="button"
+                          aria-label={`Close tab ${tabFile.name}`}
+                          onClick={() => closeFileTab(tabFile.id)}
+                          className="pr-2 pl-0.5 py-1 opacity-60 hover:opacity-100"
+                          style={{ color: theme.ui.textMuted }}
+                        >
+                          <X className="w-3 h-3" />
+                        </button>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+
             <div className="flex-1 min-h-0 overflow-hidden">
               {activeFile && (
                 <LatexCodeEditor
@@ -917,15 +1017,18 @@ Write your document here.
                   color: theme.ui.text,
                 }}
               >
-                <div className="flex items-center justify-between mb-2">
-                  <span className="font-semibold">
+                <div className="flex items-center justify-between mb-2 gap-2">
+                  <span className="font-semibold truncate">
                     Compiler Output · {compileResult.engineLabel} · {compileResult.distributionLabel}
+                    {compileResult.generatedFiles && compileResult.generatedFiles.length > 0
+                      ? ` · Artifacts: ${compileResult.generatedFiles.map((f) => f.name).join(', ')}`
+                      : ''}
                   </span>
                   <button
                     type="button"
                     aria-label="Close compiler log"
                     onClick={() => setShowLog(false)}
-                    className="p-0.5 rounded hover:opacity-75"
+                    className="p-0.5 rounded hover:opacity-75 shrink-0"
                   >
                     <X className="w-3.5 h-3.5" />
                   </button>

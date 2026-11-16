@@ -42,6 +42,7 @@ export const FileModal: React.FC<FileModalProps> = ({
   const [newProjectTitle, setNewProjectTitle] = useState('');
   const [feedback, setFeedback] = useState('');
   const openInputRef = useRef<HTMLInputElement | null>(null);
+  const openFolderRef = useRef<HTMLInputElement | null>(null);
 
   if (!isOpen) return null;
 
@@ -68,62 +69,78 @@ export const FileModal: React.FC<FileModalProps> = ({
     if (!fileList || fileList.length === 0) return;
     const imported: ProjectFile[] = [];
 
-    for (const file of Array.from(fileList)) {
+    // Collect webkitRelativePath if opened as a folder so we can strip shared top-level directory
+    const rawList = Array.from(fileList);
+    const relPaths = rawList.map((f) => {
+      const rel = (f as File & { webkitRelativePath?: string }).webkitRelativePath;
+      return rel && rel.includes('/') ? rel : f.name;
+    });
+    const allInFolder = relPaths.length > 0 && relPaths.every((p) => p.includes('/'));
+    const topFolder = allInFolder ? relPaths[0].split('/')[0] : '';
+    const canStripTop = allInFolder && relPaths.every((p) => p.split('/')[0] === topFolder);
+
+    for (let idx = 0; idx < rawList.length; idx++) {
+      const file = rawList[idx];
+      let relName = relPaths[idx];
+      if (canStripTop) {
+        relName = relName.slice(topFolder.length + 1);
+      }
+
       if (/\.zip$/i.test(file.name)) {
         const zip = await JSZip.loadAsync(file);
         for (const [entryName, entry] of Object.entries(zip.files)) {
           if (entry.dir) continue;
-          const baseName = entryName.split('/').pop() || entryName;
-          if (/\.(tex|bib|sty|cls)$/i.test(baseName)) {
+          const normalizedEntry = entryName.replace(/^\/+/, '');
+          if (/\.(tex|bib|sty|cls)$/i.test(normalizedEntry)) {
             const content = await entry.async('string');
             imported.push({
               id: `open-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
-              name: baseName,
+              name: normalizedEntry,
               content,
-              language: baseName.endsWith('.bib')
+              language: normalizedEntry.endsWith('.bib')
                 ? 'bibtex'
-                : baseName.endsWith('.sty') || baseName.endsWith('.cls')
+                : normalizedEntry.endsWith('.sty') || normalizedEntry.endsWith('.cls')
                   ? 'style'
                   : 'latex',
               updatedAt: new Date().toISOString(),
             });
-          } else if (/\.md$/i.test(baseName)) {
+          } else if (/\.md$/i.test(normalizedEntry)) {
             const mdText = await entry.async('string');
-            const texName = baseName.replace(/\.md$/i, '.tex');
+            const texName = normalizedEntry.replace(/\.md$/i, '.tex');
             imported.push({
               id: `open-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
               name: texName,
               content: markdownToLatex(mdText, {
                 includePreamble: true,
-                title: baseName.replace(/\.md$/i, ''),
+                title: normalizedEntry.replace(/\.md$/i, ''),
               }),
               language: 'latex',
               updatedAt: new Date().toISOString(),
             });
           }
         }
-      } else if (/\.md$/i.test(file.name)) {
+      } else if (/\.md$/i.test(relName)) {
         const mdText = await file.text();
-        const texName = file.name.replace(/\.md$/i, '.tex');
+        const texName = relName.replace(/\.md$/i, '.tex');
         imported.push({
           id: `open-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
           name: texName,
           content: markdownToLatex(mdText, {
             includePreamble: true,
-            title: file.name.replace(/\.md$/i, ''),
+            title: relName.replace(/\.md$/i, ''),
           }),
           language: 'latex',
           updatedAt: new Date().toISOString(),
         });
-      } else {
+      } else if (/\.(tex|bib|sty|cls)$/i.test(relName)) {
         const text = await file.text();
         imported.push({
           id: `open-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
-          name: file.name,
+          name: relName,
           content: text,
-          language: file.name.endsWith('.bib')
+          language: relName.endsWith('.bib')
             ? 'bibtex'
-            : file.name.endsWith('.sty') || file.name.endsWith('.cls')
+            : relName.endsWith('.sty') || relName.endsWith('.cls')
               ? 'style'
               : 'latex',
           updatedAt: new Date().toISOString(),
@@ -304,8 +321,8 @@ export const FileModal: React.FC<FileModalProps> = ({
             </form>
           </div>
 
-          {/* Open File & Save Controls */}
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
+          {/* Open File / Folder & Save Controls */}
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5">
             <button
               type="button"
               onClick={() => openInputRef.current?.click()}
@@ -317,13 +334,35 @@ export const FileModal: React.FC<FileModalProps> = ({
               }}
             >
               <FolderOpen className="w-4 h-4" style={{ color: theme.ui.accent }} />
-              Open (.tex / .md / .zip)
+              Open Files
             </button>
             <input
               ref={openInputRef}
               type="file"
               multiple
               accept=".tex,.bib,.sty,.cls,.md,.zip"
+              className="hidden"
+              onChange={(e) => handleOpenFiles(e.target.files)}
+            />
+
+            <button
+              type="button"
+              onClick={() => openFolderRef.current?.click()}
+              className="flex items-center justify-center gap-2 px-3 py-2.5 text-xs font-medium rounded-lg border whitespace-nowrap"
+              style={{
+                backgroundColor: theme.ui.surface,
+                borderColor: theme.ui.border,
+                color: theme.ui.text,
+              }}
+            >
+              <FolderOpen className="w-4 h-4" style={{ color: theme.ui.accent }} />
+              Open Folder
+            </button>
+            <input
+              ref={openFolderRef}
+              type="file"
+              multiple
+              {...({ webkitdirectory: '', directory: '' } as React.InputHTMLAttributes<HTMLInputElement>)}
               className="hidden"
               onChange={(e) => handleOpenFiles(e.target.files)}
             />
@@ -340,7 +379,7 @@ export const FileModal: React.FC<FileModalProps> = ({
               }}
             >
               <Download className="w-4 h-4" style={{ color: theme.ui.accent }} />
-              Save {activeFile?.name || 'File'}
+              Save File
             </button>
 
             <button
@@ -354,7 +393,7 @@ export const FileModal: React.FC<FileModalProps> = ({
               }}
             >
               <Archive className="w-4 h-4" style={{ color: theme.ui.accent }} />
-              Save Project (.zip)
+              Save .zip
             </button>
           </div>
 

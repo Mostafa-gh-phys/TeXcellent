@@ -38,11 +38,19 @@ jobs:
         with:
           node-version: 22
 
+      - name: Restore npm cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.npm
+          key: ${{ runner.os }}-npm-${{ hashFiles('package.json') }}
+          restore-keys: |
+            ${{ runner.os }}-npm-
+
       - name: Install dependencies
         shell: bash
         run: |
           rm -f package-lock.json
-          npm install --legacy-peer-deps --include=optional
+          npm install --legacy-peer-deps --include=optional --no-audit --no-fund --prefer-offline
 
       - name: Run TypeScript check
         run: npm run lint
@@ -52,7 +60,6 @@ jobs:
 
   build-desktop:
     name: Build Desktop (${{ matrix.os }})
-    needs: test-and-lint
     strategy:
       fail-fast: false
       matrix:
@@ -77,11 +84,23 @@ jobs:
         with:
           node-version: 22
 
+      - name: Cache npm and electron-builder downloads
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.npm
+            ~/.cache/electron
+            ~/.cache/electron-builder
+            ${{ runner.temp }}/eb-cache
+          key: ${{ runner.os }}-desktop-cache-v2-${{ hashFiles('package.json', 'electron-builder.yml') }}
+          restore-keys: |
+            ${{ runner.os }}-desktop-cache-v2-
+
       - name: Install Linux AppImage build dependencies (FUSE)
         if: runner.os == 'Linux'
         run: |
-          sudo apt-get update
-          sudo apt-get install -y libfuse2t64 || sudo apt-get install -y libfuse2 || true
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends libfuse2t64 || sudo apt-get install -y --no-install-recommends libfuse2 || true
 
       - name: Enable Windows Developer Mode for winCodeSign symlinks
         if: runner.os == 'Windows'
@@ -91,24 +110,17 @@ jobs:
           if (-not (Test-Path $regPath)) { New-Item -Path $regPath -Force | Out-Null }
           Set-ItemProperty -Path $regPath -Name "AllowDevelopmentWithoutDevLicense" -Value 1 -Type DWord -Force
 
-      - name: Install project dependencies
+      - name: Install project & Electron dependencies
         shell: bash
         run: |
           rm -f package-lock.json
-          npm install --legacy-peer-deps --include=optional
+          npm install --legacy-peer-deps --include=optional --no-audit --no-fund --prefer-offline
+          npm install --no-save electron@34.3.0 electron-builder@26.18.0 --legacy-peer-deps --no-audit --no-fund --prefer-offline
 
-      - name: Build frontend assets
-        run: npm run build
-
-      - name: Bundle Express backend for Electron
-        run: npm run build:server
-
-      - name: Install Electron & electron-builder
-        run: npm install --no-save electron@34.3.0 electron-builder@26.18.0 --legacy-peer-deps
-
-      - name: Clean previous release artifacts
-        shell: bash
-        run: rm -rf release
+      - name: Build frontend & Express backend assets
+        run: |
+          npm run build
+          npm run build:server
 
       - name: Package installer (${{ matrix.platform_flag }})
         env:
@@ -116,7 +128,10 @@ jobs:
           CSC_IDENTITY_AUTO_DISCOVERY: false
           ELECTRON_BUILDER_ALLOW_UNRESOLVED_DEPENDENCIES: true
           ELECTRON_BUILDER_CACHE: ${{ runner.temp }}/eb-cache
-        run: npx electron-builder --config electron-builder.yml ${{ matrix.platform_flag }} --publish never
+          ELECTRON_BUILDER_COMPRESSION_LEVEL: "6"
+        run: |
+          rm -rf release
+          npx electron-builder --config electron-builder.yml ${{ matrix.platform_flag }} --publish never
 
       - name: Upload installer artifacts
         uses: actions/upload-artifact@v4
@@ -127,7 +142,7 @@ jobs:
 
   publish-release:
     name: Create GitHub Release
-    needs: build-desktop
+    needs: [test-and-lint, build-desktop]
     if: startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && inputs.create_release)
     runs-on: ubuntu-latest
     steps:
