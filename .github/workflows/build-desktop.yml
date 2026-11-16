@@ -80,6 +80,14 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y libfuse2t64 || sudo apt-get install -y libfuse2 || true
 
+      - name: Enable Windows Developer Mode for winCodeSign symlinks
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $regPath = "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\AppModelUnlock"
+          if (-not (Test-Path $regPath)) { New-Item -Path $regPath -Force | Out-Null }
+          Set-ItemProperty -Path $regPath -Name "AllowDevelopmentWithoutDevLicense" -Value 1 -Type DWord -Force
+
       - name: Install project dependencies
         run: npm install --legacy-peer-deps
 
@@ -90,12 +98,18 @@ jobs:
         run: npm run build:server
 
       - name: Install Electron & electron-builder
-        run: npm install --no-save electron@34.3.0 electron-builder@25.1.8 --legacy-peer-deps
+        run: npm install --no-save electron@34.3.0 electron-builder@26.18.0 --legacy-peer-deps
+
+      - name: Clean previous release artifacts
+        shell: bash
+        run: rm -rf release
 
       - name: Package installer (${{ matrix.platform_flag }})
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          CSC_IDENTITY_AUTO_DISCOVERY: false
           ELECTRON_BUILDER_ALLOW_UNRESOLVED_DEPENDENCIES: true
+          ELECTRON_BUILDER_CACHE: ${{ runner.temp }}/eb-cache
         run: npx electron-builder --config electron-builder.yml ${{ matrix.platform_flag }} --publish never
 
       - name: Upload installer artifacts
