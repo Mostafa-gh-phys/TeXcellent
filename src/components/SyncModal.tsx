@@ -429,7 +429,7 @@ export const SyncModal: React.FC<SyncModalProps> = ({
                   setErrorMessage('');
                   setStatusMessage('');
                 }}
-                className="px-4 py-2 text-xs font-medium border-b-2 transition-colors whitespace-nowrap"
+                className="px-4 py-2 text-xs font-semibold border-b-2 transition-colors whitespace-nowrap"
                 style={{
                   borderColor: active ? theme.ui.accent : 'transparent',
                   color: active ? theme.ui.text : theme.ui.textMuted,

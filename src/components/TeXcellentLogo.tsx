@@ -11,19 +11,18 @@ interface TeXcellentLogoProps {
 export const TeXcellentLogo: React.FC<TeXcellentLogoProps> = ({
   accentColor = '#0969da',
   textColor = 'currentColor',
-  height = 36,
+  height = 38,
   size,
   className = '',
 }) => {
   const actualHeight = size || height;
-  // Adjusted aspect ratio for a snug fit around {TeXcellent}
-  const actualWidth = Math.round(actualHeight * (112 / 34));
+  const actualWidth = Math.round(actualHeight * (138 / 38));
 
   return (
     <svg
       width={actualWidth}
       height={actualHeight}
-      viewBox="0 0 112 34"
+      viewBox="0 0 138 38"
       fill="none"
       xmlns="http://www.w3.org/2000/svg"
       role="img"
@@ -33,32 +32,32 @@ export const TeXcellentLogo: React.FC<TeXcellentLogoProps> = ({
       <rect
         x="1"
         y="1"
-        width="110"
-        height="32"
-        rx="8"
+        width="136"
+        height="36"
+        rx="9"
         fill={accentColor}
         fillOpacity="0.10"
         stroke={accentColor}
         strokeWidth="1.5"
       />
       <text
-        x="56"
-        y="22"
+        x="69"
+        y="25.5"
         textAnchor="middle"
-        fontFamily="ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif"
-        fontSize="15.5"
-        letterSpacing="0.3px"
+        fontFamily="'CMU Serif', 'KaTeX_Main', 'Computer Modern', 'Latin Modern Roman', Georgia, serif"
+        fontSize="20.5"
+        letterSpacing="0.1px"
       >
-        <tspan fill={accentColor} fontWeight="700" opacity="0.95">
+        <tspan fill={accentColor} fontWeight="700">
           {'{'}
         </tspan>
-        <tspan fill={accentColor} fontWeight="800">
+        <tspan fill={accentColor} fontWeight="700">
           TeX
         </tspan>
-        <tspan fill={textColor} fontWeight="600">
+        <tspan fill={textColor} fontWeight="500">
           cellent
         </tspan>
-        <tspan fill={accentColor} fontWeight="700" opacity="0.95">
+        <tspan fill={accentColor} fontWeight="700">
           {'}'}
         </tspan>
       </text>

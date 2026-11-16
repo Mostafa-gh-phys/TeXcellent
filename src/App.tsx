@@ -518,7 +518,7 @@ Write your document here.
           borderColor: theme.ui.border,
         }}
       >
-        <nav className="hidden md:flex items-center gap-5 text-sm font-medium justify-self-start">
+        <nav className="hidden md:flex items-center gap-5 text-sm font-semibold justify-self-start">
           <button
             type="button"
             onClick={() => setActiveModal('file')}
@@ -570,7 +570,7 @@ Write your document here.
           <TeXcellentLogo
             accentColor={theme.ui.accent}
             textColor={theme.ui.text}
-            height={30}
+            height={40}
           />
         </a>
 
@@ -623,11 +623,11 @@ Write your document here.
           </span>
 
           {/* Quick mobile action triggers */}
-          <div className="flex md:hidden items-center gap-1">
+          <div className="flex md:hidden items-center gap-1 font-semibold">
             <button
               type="button"
               onClick={() => setActiveModal('file')}
-              className="px-2 py-1 text-xs rounded border whitespace-nowrap"
+              className="px-2 py-1 text-xs font-semibold rounded border whitespace-nowrap"
               style={{ borderColor: theme.ui.border, backgroundColor: theme.ui.bg }}
             >
               File
@@ -635,7 +635,7 @@ Write your document here.
             <button
               type="button"
               onClick={() => setActiveModal('smart')}
-              className="px-2 py-1 text-xs rounded border whitespace-nowrap"
+              className="px-2 py-1 text-xs font-semibold rounded border whitespace-nowrap"
               style={{ borderColor: theme.ui.border, backgroundColor: theme.ui.bg }}
             >
               Smart
@@ -643,7 +643,7 @@ Write your document here.
             <button
               type="button"
               onClick={() => setActiveModal('sync')}
-              className="px-2 py-1 text-xs rounded border whitespace-nowrap"
+              className="px-2 py-1 text-xs font-semibold rounded border whitespace-nowrap"
               style={{ borderColor: theme.ui.border, backgroundColor: theme.ui.bg }}
             >
               Sync
@@ -651,7 +651,7 @@ Write your document here.
             <button
               type="button"
               onClick={() => setActiveModal('compiler')}
-              className="px-2 py-1 text-xs rounded border whitespace-nowrap"
+              className="px-2 py-1 text-xs font-semibold rounded border whitespace-nowrap"
               style={{ borderColor: theme.ui.border, backgroundColor: theme.ui.bg }}
             >
               Compiler
@@ -659,7 +659,7 @@ Write your document here.
             <button
               type="button"
               onClick={() => setActiveModal('settings')}
-              className="px-2 py-1 text-xs rounded border whitespace-nowrap"
+              className="px-2 py-1 text-xs font-semibold rounded border whitespace-nowrap"
               style={{ borderColor: theme.ui.border, backgroundColor: theme.ui.bg }}
             >
               Settings
@@ -683,7 +683,7 @@ Write your document here.
                   compilerMode: e.target.value as CompilerMode,
                 }))
               }
-              className="px-2.5 py-1 text-xs font-medium rounded border outline-none"
+              className="px-2.5 py-1 text-xs font-semibold rounded border outline-none"
               style={{
                 backgroundColor: theme.ui.bg,
                 borderColor: theme.ui.border,
@@ -702,7 +702,7 @@ Write your document here.
           <button
             type="button"
             onClick={() => setActiveModal('compiler')}
-            className="hidden sm:inline-flex items-center px-2.5 py-1 text-xs rounded border whitespace-nowrap"
+            className="hidden sm:inline-flex items-center px-2.5 py-1 text-xs font-semibold rounded border whitespace-nowrap"
             style={{
               backgroundColor: theme.ui.bg,
               borderColor: theme.ui.border,
@@ -721,7 +721,7 @@ Write your document here.
             <button
               type="button"
               onClick={() => setPreviewMode('beside')}
-              className="px-2.5 py-0.5 text-xs font-medium rounded whitespace-nowrap"
+              className="px-2.5 py-0.5 text-xs font-semibold rounded whitespace-nowrap"
               style={{
                 backgroundColor: previewMode === 'beside' ? theme.ui.bg : 'transparent',
                 color: previewMode === 'beside' ? theme.ui.text : theme.ui.textMuted,
@@ -732,7 +732,7 @@ Write your document here.
             <button
               type="button"
               onClick={() => setPreviewMode('editor-only')}
-              className="px-2.5 py-0.5 text-xs font-medium rounded whitespace-nowrap"
+              className="px-2.5 py-0.5 text-xs font-semibold rounded whitespace-nowrap"
               style={{
                 backgroundColor: previewMode === 'editor-only' ? theme.ui.bg : 'transparent',
                 color: previewMode === 'editor-only' ? theme.ui.text : theme.ui.textMuted,
@@ -750,7 +750,7 @@ Write your document here.
             <button
               type="button"
               onClick={() => setMobilePane('editor')}
-              className="px-2 py-0.5 text-xs font-medium rounded"
+              className="px-2 py-0.5 text-xs font-semibold rounded"
               style={{
                 backgroundColor: mobilePane === 'editor' ? theme.ui.bg : 'transparent',
                 color: mobilePane === 'editor' ? theme.ui.text : theme.ui.textMuted,
@@ -761,7 +761,7 @@ Write your document here.
             <button
               type="button"
               onClick={() => setMobilePane('preview')}
-              className="px-2 py-0.5 text-xs font-medium rounded"
+              className="px-2 py-0.5 text-xs font-semibold rounded"
               style={{
                 backgroundColor: mobilePane === 'preview' ? theme.ui.bg : 'transparent',
                 color: mobilePane === 'preview' ? theme.ui.text : theme.ui.textMuted,

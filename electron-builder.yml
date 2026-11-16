@@ -2,6 +2,9 @@ appId: com.texcellent.studio
 productName: TeXcellent
 copyright: Copyright © 2026 TeXcellent Contributors
 electronVersion: 34.3.0
+npmRebuild: false
+nodeGypRebuild: false
+buildDependenciesFromSource: false
 extraMetadata:
   name: texcellent
   version: 1.0.0
@@ -15,6 +18,7 @@ files:
   - dist-server/**/*
   - electron/**/*
   - package.json
+  - "!**/node_modules/**/*"
 asar: true
 asarUnpack:
   - dist/**/*
@@ -28,6 +32,9 @@ linux:
   synopsis: Bilingual LaTeX Studio with TeX Live & MiKTeX autodetection
 win:
   target:
+    - target: nsis
+      arch:
+        - x64
     - target: portable
       arch:
         - x64
@@ -36,6 +43,7 @@ nsis:
   allowToChangeInstallationDirectory: true
 mac:
   identity: null
+  notarize: false
   hardenedRuntime: false
   gatekeeperAssess: false
   target:
@@ -48,3 +56,5 @@ mac:
         - x64
         - arm64
   category: public.app-category.productivity
+dmg:
+  filesystem: APFS

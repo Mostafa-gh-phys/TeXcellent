@@ -38,6 +38,9 @@ async function createWindow() {
   const port = await findFreePort(3000);
   process.env.PORT = String(port);
   const isPackaged = app.isPackaged;
+  if (isPackaged) {
+    process.env.NODE_ENV = 'production';
+  }
   const distDir = isPackaged && process.resourcesPath
     ? path.join(process.resourcesPath, 'app.asar.unpacked', 'dist')
     : path.join(__dirname, '..', 'dist');
