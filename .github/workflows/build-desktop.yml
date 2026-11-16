@@ -39,7 +39,10 @@ jobs:
           node-version: 22
 
       - name: Install dependencies
-        run: npm install --legacy-peer-deps
+        shell: bash
+        run: |
+          rm -f package-lock.json
+          npm install --legacy-peer-deps --include=optional
 
       - name: Run TypeScript check
         run: npm run lint
@@ -89,7 +92,10 @@ jobs:
           Set-ItemProperty -Path $regPath -Name "AllowDevelopmentWithoutDevLicense" -Value 1 -Type DWord -Force
 
       - name: Install project dependencies
-        run: npm install --legacy-peer-deps
+        shell: bash
+        run: |
+          rm -f package-lock.json
+          npm install --legacy-peer-deps --include=optional
 
       - name: Build frontend assets
         run: npm run build

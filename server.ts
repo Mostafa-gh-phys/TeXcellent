@@ -1421,7 +1421,7 @@ async function startServer() {
           const rel = path.relative(rootDir, full).replace(/\\/g, '/');
           if (skipDirs.has(entry.name) || skipDirs.has(rel)) continue;
           if (entry.name.startsWith('.env') && entry.name !== '.env.example') continue;
-          if (entry.name === '.DS_Store' || entry.name === 'Thumbs.db') continue;
+          if (entry.name === '.DS_Store' || entry.name === 'Thumbs.db' || entry.name === 'package-lock.json') continue;
           if (entry.isDirectory()) {
             await walkDir(full);
           } else if (entry.isFile()) {
