@@ -29,6 +29,9 @@ jobs:
   test-and-lint:
     name: Typecheck & Unit Tests
     runs-on: ubuntu-latest
+    defaults:
+      run:
+        shell: bash
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -42,15 +45,15 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ~/.npm
-          key: ${{ runner.os }}-npm-${{ hashFiles('package.json') }}
+          key: ${{ runner.os }}-npm-v3-${{ hashFiles('package.json') }}
           restore-keys: |
-            ${{ runner.os }}-npm-
+            ${{ runner.os }}-npm-v3-
 
       - name: Install dependencies
-        shell: bash
         run: |
-          rm -f package-lock.json
-          npm install --legacy-peer-deps --include=optional --no-audit --no-fund --prefer-offline
+          node -e "require('node:fs').rmSync('package-lock.json', { force: true })"
+          npm install --legacy-peer-deps --include=optional --no-audit --no-fund
+          node scripts/ensure-native-bindings.mjs
 
       - name: Run TypeScript check
         run: npm run lint
@@ -60,6 +63,9 @@ jobs:
 
   build-desktop:
     name: Build Desktop (${{ matrix.os }})
+    defaults:
+      run:
+        shell: bash
     strategy:
       fail-fast: false
       matrix:
@@ -84,17 +90,21 @@ jobs:
         with:
           node-version: 22
 
+      - name: Setup Python for native build tooling
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
       - name: Cache npm and electron-builder downloads
         uses: actions/cache@v4
         with:
           path: |
             ~/.npm
-            ~/.cache/electron
-            ~/.cache/electron-builder
+            ${{ runner.temp }}/electron-cache
             ${{ runner.temp }}/eb-cache
-          key: ${{ runner.os }}-desktop-cache-v2-${{ hashFiles('package.json', 'electron-builder.yml') }}
+          key: ${{ runner.os }}-desktop-cache-v3-${{ hashFiles('package.json', 'electron-builder.yml', 'scripts/ensure-native-bindings.mjs') }}
           restore-keys: |
-            ${{ runner.os }}-desktop-cache-v2-
+            ${{ runner.os }}-desktop-cache-v3-
 
       - name: Install Linux AppImage build dependencies (FUSE)
         if: runner.os == 'Linux'
@@ -110,12 +120,14 @@ jobs:
           if (-not (Test-Path $regPath)) { New-Item -Path $regPath -Force | Out-Null }
           Set-ItemProperty -Path $regPath -Name "AllowDevelopmentWithoutDevLicense" -Value 1 -Type DWord -Force
 
-      - name: Install project & Electron dependencies
-        shell: bash
+      - name: Install project, Electron & pre-built native bindings
+        env:
+          npm_config_msvs_version: "2022"
         run: |
-          rm -f package-lock.json
-          npm install --legacy-peer-deps --include=optional --no-audit --no-fund --prefer-offline
-          npm install --no-save electron@34.3.0 electron-builder@26.18.0 --legacy-peer-deps --no-audit --no-fund --prefer-offline
+          node -e "require('node:fs').rmSync('package-lock.json', { force: true })"
+          npm install --legacy-peer-deps --include=optional --no-audit --no-fund
+          npm install --no-save --include=optional electron@34.3.0 electron-builder@26.18.0 --legacy-peer-deps --no-audit --no-fund
+          node scripts/ensure-native-bindings.mjs
 
       - name: Build frontend & Express backend assets
         run: |
@@ -127,11 +139,12 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           CSC_IDENTITY_AUTO_DISCOVERY: false
           ELECTRON_BUILDER_ALLOW_UNRESOLVED_DEPENDENCIES: true
+          ELECTRON_CACHE: ${{ runner.temp }}/electron-cache
           ELECTRON_BUILDER_CACHE: ${{ runner.temp }}/eb-cache
           ELECTRON_BUILDER_COMPRESSION_LEVEL: "6"
         run: |
-          rm -rf release
-          npx electron-builder --config electron-builder.yml ${{ matrix.platform_flag }} --publish never
+          node -e "require('node:fs').rmSync('release', { recursive: true, force: true })"
+          npx --no-install electron-builder --config electron-builder.yml ${{ matrix.platform_flag }} --publish never
 
       - name: Upload installer artifacts
         uses: actions/upload-artifact@v4
