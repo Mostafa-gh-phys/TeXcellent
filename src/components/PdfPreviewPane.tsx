@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import katex from 'katex';
 import {
   Download,
@@ -7,10 +7,13 @@ import {
   ZoomOut,
   BookOpen,
   AlertTriangle,
+  FileText,
+  Terminal,
 } from 'lucide-react';
 import { CompileResult } from '../types/latex';
 import { EditorTheme } from '../utils/themes';
 import { ParsedBlock, ParsedInlineSegment, parseLatexDocument } from '../utils/latexParser';
+import { PdfBinaryCanvasViewer } from './PdfBinaryCanvasViewer';
 
 interface PdfPreviewPaneProps {
   source: string;
@@ -19,6 +22,8 @@ interface PdfPreviewPaneProps {
   theme: EditorTheme;
   onOpenExternal: () => void;
   onRecompile?: () => void;
+  onOpenLog?: () => void;
+  onSwitchToXelatex?: () => void;
   isExternalWindow?: boolean;
 }
 
@@ -330,10 +335,47 @@ export const PdfPreviewPane: React.FC<PdfPreviewPaneProps> = ({
   isCompiling,
   theme,
   onOpenExternal,
+  onOpenLog,
+  onSwitchToXelatex,
   isExternalWindow = false,
 }) => {
   const [zoom, setZoom] = useState(100);
+  const hasRealNativePdf = Boolean(
+    compileResult?.pdfUrl &&
+      (compileResult.backendType === 'native-binary' ||
+        compileResult.backendType === 'remote-endpoint')
+  );
+  const isNativeHaltedWithoutPdf = Boolean(
+    compileResult &&
+      !compileResult.success &&
+      !compileResult.pdfUrl &&
+      compileResult.backendType === 'native-binary'
+  );
+  const [viewMode, setViewMode] = useState<'pdf' | 'typeset'>(() =>
+    hasRealNativePdf ? 'pdf' : 'typeset'
+  );
+  const [showDraftDespiteError, setShowDraftDespiteError] = useState(false);
+
+  useEffect(() => {
+    setShowDraftDespiteError(false);
+    if (hasRealNativePdf) {
+      setViewMode('pdf');
+    } else if (!compileResult?.pdfUrl) {
+      setViewMode('typeset');
+    }
+  }, [compileResult?.compileId, hasRealNativePdf, compileResult?.pdfUrl]);
+
   const parsed = useMemo(() => parseLatexDocument(source), [source]);
+  const errorMessage =
+    compileResult?.diagnostics.find((d) => d.level === 'error')?.message ||
+    'Compilation completed with errors.';
+  const needsXelatexSwitch =
+    Boolean(onSwitchToXelatex) &&
+    compileResult?.engineLabel !== 'XELATEX' &&
+    /xepersian|xetex/i.test(`${errorMessage}\n${compileResult?.rawLog || ''}`);
+
+  const downloadFilename =
+    compileResult?.generatedFiles?.find((f) => /\.pdf$/i.test(f.name))?.name || 'document.pdf';
 
   return (
     <div
@@ -352,22 +394,57 @@ export const PdfPreviewPane: React.FC<PdfPreviewPaneProps> = ({
           borderColor: theme.ui.border,
         }}
       >
-        <div className="flex items-center gap-2">
-          <div
-            className="inline-flex items-center gap-1.5 px-2.5 py-1 text-xs font-semibold rounded-md border whitespace-nowrap"
-            style={{
-              backgroundColor: theme.ui.bg,
-              borderColor: theme.ui.border,
-              color: theme.ui.text,
-            }}
-          >
-            <BookOpen className="w-3.5 h-3.5" />
-            Typeset
-          </div>
+        <div className="flex items-center gap-2 min-w-0">
+          {compileResult?.pdfUrl ? (
+            <div
+              className="inline-flex items-center p-0.5 rounded-md border"
+              style={{
+                backgroundColor: theme.ui.surfaceAlt,
+                borderColor: theme.ui.border,
+              }}
+            >
+              <button
+                type="button"
+                onClick={() => setViewMode('pdf')}
+                className="inline-flex items-center gap-1 px-2 py-0.5 text-xs font-semibold rounded whitespace-nowrap"
+                style={{
+                  backgroundColor: viewMode === 'pdf' ? theme.ui.bg : 'transparent',
+                  color: viewMode === 'pdf' ? theme.ui.text : theme.ui.textMuted,
+                }}
+              >
+                <FileText className="w-3.5 h-3.5" />
+                PDF
+              </button>
+              <button
+                type="button"
+                onClick={() => setViewMode('typeset')}
+                className="inline-flex items-center gap-1 px-2 py-0.5 text-xs font-semibold rounded whitespace-nowrap"
+                style={{
+                  backgroundColor: viewMode === 'typeset' ? theme.ui.bg : 'transparent',
+                  color: viewMode === 'typeset' ? theme.ui.text : theme.ui.textMuted,
+                }}
+              >
+                <BookOpen className="w-3.5 h-3.5" />
+                Typeset
+              </button>
+            </div>
+          ) : (
+            <div
+              className="inline-flex items-center gap-1.5 px-2.5 py-1 text-xs font-semibold rounded-md border whitespace-nowrap"
+              style={{
+                backgroundColor: theme.ui.bg,
+                borderColor: theme.ui.border,
+                color: theme.ui.text,
+              }}
+            >
+              <BookOpen className="w-3.5 h-3.5" />
+              Typeset
+            </div>
+          )}
 
           {compileResult && (
             <span
-              className="hidden sm:inline text-xs tabular-nums whitespace-nowrap ml-1"
+              className="hidden sm:inline text-xs tabular-nums whitespace-nowrap ml-1 truncate"
               style={{ color: theme.ui.textMuted }}
             >
               {compileResult.engineLabel} · {compileResult.durationMs}ms
@@ -404,7 +481,7 @@ export const PdfPreviewPane: React.FC<PdfPreviewPaneProps> = ({
           {compileResult?.pdfUrl && (
             <a
               href={compileResult.pdfUrl}
-              download="document.pdf"
+              download={downloadFilename}
               aria-label="Download compiled PDF"
               className="flex items-center gap-1 px-2.5 py-1 text-xs font-semibold rounded border whitespace-nowrap transition-colors"
               style={{
@@ -438,22 +515,91 @@ export const PdfPreviewPane: React.FC<PdfPreviewPaneProps> = ({
 
       {/* Diagnostic banner when compiler reports errors */}
       {compileResult && !compileResult.success && (
-        <div className="px-3 py-2 bg-red-50 border-b border-red-200 text-red-800 text-xs flex items-center gap-2 shrink-0">
-          <AlertTriangle className="w-4 h-4 shrink-0" />
-          <span className="truncate">
-            {compileResult.diagnostics.find((d) => d.level === 'error')?.message ||
-              'Compilation completed with errors.'}
-          </span>
+        <div className="px-3 py-2 bg-red-50 border-b border-red-200 text-red-800 text-xs flex items-center justify-between gap-2 shrink-0">
+          <div className="flex items-center gap-2 min-w-0">
+            <AlertTriangle className="w-4 h-4 shrink-0" />
+            <span className="truncate">{errorMessage}</span>
+          </div>
+          {needsXelatexSwitch && (
+            <button
+              type="button"
+              onClick={onSwitchToXelatex}
+              className="px-2 py-0.5 text-[11px] font-semibold rounded bg-red-700 text-white hover:bg-red-800 whitespace-nowrap shrink-0"
+            >
+              Use XeLaTeX
+            </button>
+          )}
         </div>
       )}
 
       {/* Preview Canvas */}
-      <div className="flex-1 overflow-auto p-4 sm:p-6">
-        {isCompiling ? (
-          <div className="h-full flex items-center justify-center text-sm" style={{ color: theme.ui.textMuted }}>
-            Compiling document...
+      {isCompiling ? (
+        <div
+          className="flex-1 flex items-center justify-center text-sm"
+          style={{ color: theme.ui.textMuted }}
+        >
+          Compiling document...
+        </div>
+      ) : viewMode === 'pdf' && compileResult?.pdfUrl ? (
+        <PdfBinaryCanvasViewer
+          pdfUrl={compileResult.pdfUrl}
+          zoom={zoom}
+          theme={theme}
+        />
+      ) : isNativeHaltedWithoutPdf && !showDraftDespiteError ? (
+        <div className="flex-1 overflow-auto p-6 flex items-center justify-center">
+          <div
+            className="max-w-md w-full rounded-xl border p-6 space-y-4 text-center shadow-sm"
+            style={{
+              backgroundColor: theme.ui.bg,
+              borderColor: theme.ui.border,
+              color: theme.ui.text,
+            }}
+          >
+            <div className="mx-auto w-10 h-10 rounded-full bg-red-500/10 text-red-600 flex items-center justify-center">
+              <AlertTriangle className="w-5 h-5" />
+            </div>
+            <div className="space-y-1.5">
+              <h3 className="text-sm font-semibold">Compilation Halted — No PDF Produced</h3>
+              <p className="text-xs leading-relaxed" style={{ color: theme.ui.textMuted }}>
+                {errorMessage}
+              </p>
+            </div>
+            <div className="flex flex-wrap items-center justify-center gap-2">
+              {needsXelatexSwitch && (
+                <button
+                  type="button"
+                  onClick={onSwitchToXelatex}
+                  className="px-3 py-1.5 text-xs font-semibold rounded-md"
+                  style={{ backgroundColor: theme.ui.accent, color: theme.ui.accentFg }}
+                >
+                  Switch to XeLaTeX &amp; Compile
+                </button>
+              )}
+              {onOpenLog && (
+                <button
+                  type="button"
+                  onClick={onOpenLog}
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded-md border"
+                  style={{ borderColor: theme.ui.border, backgroundColor: theme.ui.surface }}
+                >
+                  <Terminal className="w-3.5 h-3.5" />
+                  View Compiler Log
+                </button>
+              )}
+            </div>
+            <button
+              type="button"
+              onClick={() => setShowDraftDespiteError(true)}
+              className="text-[11px] underline underline-offset-2 opacity-75 hover:opacity-100"
+              style={{ color: theme.ui.textMuted }}
+            >
+              Show live source preview anyway
+            </button>
           </div>
-        ) : (
+        </div>
+      ) : (
+        <div className="flex-1 overflow-auto p-4 sm:p-6">
           <div
             className="mx-auto bg-white text-neutral-900 shadow-sm border border-neutral-200 transition-transform origin-top"
             style={{
@@ -491,8 +637,8 @@ export const PdfPreviewPane: React.FC<PdfPreviewPaneProps> = ({
               parsed.blocks.map((block, index) => <BlockRenderer key={index} block={block} />)
             )}
           </div>
-        )}
-      </div>
+        </div>
+      )}
     </div>
   );
 };

@@ -35,6 +35,10 @@ import {
   normalizeProjectFilePath,
   stripSharedRootFolder,
 } from './utils/fileTree';
+import {
+  resolveCompileTargetFile,
+  resolveDocumentDisplayTitle,
+} from './utils/documentTitle';
 import { markdownToLatex } from './utils/latexMarkdown';
 import { LatexCodeEditor } from './components/LatexCodeEditor';
 import { PdfPreviewPane } from './components/PdfPreviewPane';
@@ -166,6 +170,8 @@ export default function App() {
     project.files.find((f) => f.id === activeFileId) || project.files[0];
   const mainFile =
     project.files.find((f) => f.id === project.mainFileId) || project.files[0];
+  const compileTargetFile = resolveCompileTargetFile(activeFile, mainFile, project.files);
+  const documentDisplayTitle = resolveDocumentDisplayTitle(activeFile, mainFile, project.name);
 
   const openFileTab = useCallback((fileId: string) => {
     setActiveFileId(fileId);
@@ -287,17 +293,18 @@ export default function App() {
     return () => channel.close();
   }, [isExternalPreviewWindow, project, compileResult, themeId]);
 
-  const handleCompile = useCallback(async () => {
+  const handleCompile = useCallback(async (overrideMode?: CompilerMode) => {
+    const effectiveMode = overrideMode || compilerSettings.compilerMode;
     setIsCompiling(true);
     try {
       const res = await fetch('/api/compile', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          projectName: project.name,
-          mainFileName: mainFile?.name || 'main.tex',
+          projectName: documentDisplayTitle,
+          mainFileName: compileTargetFile?.name || mainFile?.name || 'main.tex',
           files: project.files,
-          mode: compilerSettings.compilerMode,
+          mode: effectiveMode,
           customBinaryPath: compilerSettings.customBinaryPath,
           remoteEndpointUrl: compilerSettings.remoteEndpointUrl,
           shellEscape: compilerSettings.shellEscape,
@@ -321,7 +328,7 @@ export default function App() {
     } finally {
       setIsCompiling(false);
     }
-  }, [project, mainFile, compilerSettings]);
+  }, [project, compileTargetFile, mainFile, documentDisplayTitle, compilerSettings]);
 
   const detectLocalCompilers = useCallback(async (customDir?: string) => {
     try {
@@ -590,12 +597,13 @@ Write your document here.
     return (
       <div className="h-screen w-screen overflow-hidden" style={{ backgroundColor: theme.ui.bg }}>
         <PdfPreviewPane
-          source={mainFile?.content || ''}
+          source={compileTargetFile?.content || ''}
           compileResult={compileResult}
           isCompiling={isCompiling}
           theme={theme}
           onOpenExternal={() => {}}
-          onRecompile={handleCompile}
+          onRecompile={() => handleCompile()}
+          onOpenLog={() => setShowLog(true)}
           isExternalWindow
         />
       </div>
@@ -693,7 +701,7 @@ Write your document here.
         <div className="flex items-center justify-self-end shrink-0">
           <button
             type="button"
-            onClick={handleCompile}
+            onClick={() => handleCompile()}
             disabled={isCompiling}
             className="inline-flex items-center gap-2 px-4 py-1.5 text-xs font-semibold rounded-lg whitespace-nowrap shrink-0 transition-opacity disabled:opacity-60"
             style={{
@@ -734,8 +742,12 @@ Write your document here.
             <PanelLeft className="w-3.5 h-3.5" />
           </button>
 
-          <span className="hidden sm:inline text-xs font-semibold truncate max-w-[220px]" title={project.name}>
-            {project.name}
+          <span
+            dir="auto"
+            className="hidden sm:inline text-xs font-semibold truncate max-w-[260px]"
+            title={documentDisplayTitle}
+          >
+            {documentDisplayTitle}
           </span>
 
           {/* Quick mobile action triggers */}
@@ -903,6 +915,13 @@ Write your document here.
             mainFileId={project.mainFileId}
             activeFileId={activeFile?.id || ''}
             onSelectFile={openFileTab}
+            onSetMainFile={(fileId) =>
+              setProject((prev) => ({
+                ...prev,
+                mainFileId: fileId,
+                updatedAt: new Date().toISOString(),
+              }))
+            }
             onAddFile={(filePath) => handleCreateFile(filePath)}
             onDeleteFile={handleDeleteFile}
             onOpenFolderClick={() => sidebarFolderInputRef.current?.click()}
@@ -1098,12 +1117,17 @@ Write your document here.
               } flex-col`}
             >
               <PdfPreviewPane
-                source={mainFile?.content || ''}
+                source={compileTargetFile?.content || ''}
                 compileResult={compileResult}
                 isCompiling={isCompiling}
                 theme={theme}
                 onOpenExternal={handleOpenExternalPreview}
-                onRecompile={handleCompile}
+                onRecompile={() => handleCompile()}
+                onOpenLog={() => setShowLog(true)}
+                onSwitchToXelatex={() => {
+                  setCompilerSettings((prev) => ({ ...prev, compilerMode: 'xelatex' }));
+                  handleCompile('xelatex');
+                }}
               />
             </section>
           )}
@@ -1203,12 +1227,17 @@ Write your document here.
             </div>
             <div className="flex-1 min-h-0">
               <PdfPreviewPane
-                source={mainFile?.content || ''}
+                source={compileTargetFile?.content || ''}
                 compileResult={compileResult}
                 isCompiling={isCompiling}
                 theme={theme}
                 onOpenExternal={() => {}}
-                onRecompile={handleCompile}
+                onRecompile={() => handleCompile()}
+                onOpenLog={() => setShowLog(true)}
+                onSwitchToXelatex={() => {
+                  setCompilerSettings((prev) => ({ ...prev, compilerMode: 'xelatex' }));
+                  handleCompile('xelatex');
+                }}
                 isExternalWindow
               />
             </div>

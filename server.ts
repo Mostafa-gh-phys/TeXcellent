@@ -933,11 +933,23 @@ async function startServer() {
           }
 
           const pdfName = `${jobBase}.pdf`;
-          const pdfPath = path.join(tmpDir, pdfName);
+          const candidatePdfPaths = [
+            path.join(tmpDir, pdfName),
+            path.join(tmpDir, path.dirname(safeMainRel), pdfName),
+          ];
           const distTitle = `${detectedTex.detectedFamily || 'Local TeX'} (${path.basename(nativeCmd)})`;
 
-          try {
-            const pdfBytes = await fs.readFile(pdfPath);
+          let pdfBytes: Buffer | null = null;
+          for (const candidate of candidatePdfPaths) {
+            try {
+              pdfBytes = await fs.readFile(candidate);
+              break;
+            } catch {
+              // check next candidate
+            }
+          }
+
+          if (pdfBytes) {
             const compileId = crypto.randomUUID();
             compiledPdfs.set(compileId, {
               buffer: pdfBytes,
@@ -959,45 +971,64 @@ async function startServer() {
                   level: compileOk ? 'info' : 'error',
                   message: compileOk
                     ? `Compiled cleanly via ${nativeCmd} (${generatedFiles.length} output files)`
-                    : `Native compilation finished with errors.`,
-                },
-              ],
-              generatedFiles,
-              timestamp: new Date().toISOString(),
-            });
-          } catch {
-            // Also read .log if stdout missed error details
-            try {
-              const dotLog = await fs.readFile(path.join(tmpDir, `${jobBase}.log`), 'utf8');
-              if (dotLog && !logChunks.join('').includes(dotLog.slice(0, 80))) {
-                logChunks.push(`--- ${jobBase}.log (tail) ---\n${dotLog.slice(-4000)}`);
-              }
-            } catch {
-              // ignore missing .log
-            }
-            return res.json({
-              success: false,
-              compileId: 'none',
-              pdfUrl: '',
-              durationMs: Date.now() - started,
-              pageCount: 0,
-              engineLabel: mode.toUpperCase(),
-              distributionLabel: distTitle,
-              backendType: 'native-binary',
-              rawLog: logChunks.join('\n\n').trim(),
-              diagnostics: [
-                {
-                  level: 'error',
-                  message:
-                    outputFormat !== 'pdf'
-                      ? `Compiled in ${outputFormat.toUpperCase()} mode without PDF output.`
-                      : 'Native compiler halted before producing a PDF file.',
+                    : `Native compilation finished with warnings/errors.`,
                 },
               ],
               generatedFiles,
               timestamp: new Date().toISOString(),
             });
           }
+
+          // Read .log if stdout missed error details
+          let dotLog = '';
+          for (const logCandidate of [
+            path.join(tmpDir, `${jobBase}.log`),
+            path.join(tmpDir, path.dirname(safeMainRel), `${jobBase}.log`),
+          ]) {
+            try {
+              dotLog = await fs.readFile(logCandidate, 'utf8');
+              if (dotLog) break;
+            } catch {
+              // try next
+            }
+          }
+          if (dotLog && !logChunks.join('').includes(dotLog.slice(0, 80))) {
+            logChunks.push(`--- ${jobBase}.log (tail) ---\n${dotLog.slice(-4000)}`);
+          }
+
+          const combinedLog = logChunks.join('\n\n').trim();
+          const bangLineMatch = combinedLog.match(/^!\s*(.+)$/m);
+          const xepersianMismatch =
+            /xepersian/i.test(combinedLog) &&
+            /xetex|xelatex|fatal/i.test(combinedLog) &&
+            mode !== 'xelatex';
+          const primaryErrorMsg = xepersianMismatch
+            ? `Package xepersian requires XeLaTeX (current mode: ${mode.toUpperCase()}). Switch compiler to XeLaTeX.`
+            : bangLineMatch
+              ? bangLineMatch[1].trim()
+              : outputFormat !== 'pdf'
+                ? `Compiled in ${outputFormat.toUpperCase()} mode without PDF output.`
+                : 'Native compiler halted before producing a PDF file.';
+
+          return res.json({
+            success: false,
+            compileId: 'none',
+            pdfUrl: '',
+            durationMs: Date.now() - started,
+            pageCount: 0,
+            engineLabel: mode.toUpperCase(),
+            distributionLabel: distTitle,
+            backendType: 'native-binary',
+            rawLog: combinedLog,
+            diagnostics: [
+              {
+                level: 'error',
+                message: primaryErrorMsg,
+              },
+            ],
+            generatedFiles,
+            timestamp: new Date().toISOString(),
+          });
         } finally {
           await fs.rm(tmpDir, { recursive: true, force: true }).catch(() => {});
         }

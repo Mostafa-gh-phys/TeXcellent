@@ -41,6 +41,7 @@ export type PreviewMode = 'beside' | 'external' | 'editor-only';
 
 export type EditorFontId =
   | 'jetbrains'
+  | 'cascadia-code'
   | 'ibm-plex'
   | 'fira-code'
   | 'source-code'

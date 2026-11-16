@@ -734,7 +734,7 @@ export const SyncModal: React.FC<SyncModalProps> = ({
                     Publish TeXcellent App &amp; Desktop Installers (AppImage, .exe, macOS)
                   </div>
                   <p className="text-[11px] mt-0.5" style={{ color: theme.ui.textMuted }}>
-                    Create a repository and push TeXcellent&apos;s source + GitHub Actions workflow (<code className="font-mono">.github/workflows/build-desktop.yml</code>) to build desktop installers automatically.
+                    Create a repository and push TeXcellent&apos;s source + GitHub Actions workflow (<code className="font-mono">.github/workflows/build-desktop.yml</code>). Run the workflow manually from GitHub Actions with your release tag to name and build the desktop installers.
                   </p>
                 </div>
 

@@ -7,7 +7,6 @@ nodeGypRebuild: false
 buildDependenciesFromSource: false
 extraMetadata:
   name: texcellent
-  version: 1.0.0
   description: Bilingual LaTeX Studio with TeX Live & MiKTeX autodetection
   author: TeXcellent Contributors
   main: electron/main.cjs

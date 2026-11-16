@@ -19,6 +19,7 @@ interface FileTreeSidebarProps {
   mainFileId: string;
   activeFileId: string;
   onSelectFile: (fileId: string) => void;
+  onSetMainFile?: (fileId: string) => void;
   onAddFile: (filePath: string) => void;
   onDeleteFile: (fileId: string) => void;
   onOpenFolderClick: () => void;
@@ -30,6 +31,7 @@ export const FileTreeSidebar: React.FC<FileTreeSidebarProps> = ({
   mainFileId,
   activeFileId,
   onSelectFile,
+  onSetMainFile,
   onAddFile,
   onDeleteFile,
   onOpenFolderClick,
@@ -133,17 +135,31 @@ export const FileTreeSidebar: React.FC<FileTreeSidebarProps> = ({
               </span>
             )}
           </button>
-          {!isMain && files.length > 1 && (
-            <button
-              type="button"
-              aria-label={`Delete ${node.path}`}
-              onClick={() => onDeleteFile(file.id)}
-              className="opacity-0 group-hover:opacity-100 focus:opacity-100 p-0.5 rounded hover:text-red-500"
-              style={{ color: theme.ui.textMuted }}
-            >
-              <Trash2 className="w-3 h-3" />
-            </button>
-          )}
+          <div className="flex items-center gap-0.5 shrink-0">
+            {!isMain && file.language === 'latex' && onSetMainFile && (
+              <button
+                type="button"
+                aria-label={`Set ${node.path} as main file`}
+                title="Set as main document"
+                onClick={() => onSetMainFile(file.id)}
+                className="opacity-0 group-hover:opacity-100 focus:opacity-100 px-1 py-0.5 text-[9px] font-medium rounded border"
+                style={{ borderColor: theme.ui.border, color: theme.ui.textMuted }}
+              >
+                main
+              </button>
+            )}
+            {!isMain && files.length > 1 && (
+              <button
+                type="button"
+                aria-label={`Delete ${node.path}`}
+                onClick={() => onDeleteFile(file.id)}
+                className="opacity-0 group-hover:opacity-100 focus:opacity-100 p-0.5 rounded hover:text-red-500"
+                style={{ color: theme.ui.textMuted }}
+              >
+                <Trash2 className="w-3 h-3" />
+              </button>
+            )}
+          </div>
         </div>
       );
     });

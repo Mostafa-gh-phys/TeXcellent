@@ -14,6 +14,12 @@ export const EDITOR_FONTS: Record<EditorFontId, EditorFontOption> = {
     cssFamily: "'JetBrains Mono', 'Vazirmatn', ui-monospace, monospace",
     rtlFamily: "'Vazirmatn', 'JetBrains Mono', monospace",
   },
+  'cascadia-code': {
+    id: 'cascadia-code',
+    name: 'Cascadia Code',
+    cssFamily: "'Cascadia Code', 'Vazirmatn', ui-monospace, monospace",
+    rtlFamily: "'Vazirmatn', 'Cascadia Code', monospace",
+  },
   'ibm-plex': {
     id: 'ibm-plex',
     name: 'IBM Plex Mono',

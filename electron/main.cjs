@@ -71,6 +71,7 @@ async function createWindow() {
     webPreferences: {
       contextIsolation: true,
       nodeIntegration: false,
+      plugins: true,
     },
   });
 
