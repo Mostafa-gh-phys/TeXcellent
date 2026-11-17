@@ -32,6 +32,7 @@ import {
 import {
   DEFAULT_COMPILER_SETTINGS,
   inferPreferredCompilerMode,
+  inferProjectCompilerMode,
   mergeCompilerSettings,
 } from './utils/compilerArgs';
 import {
@@ -46,6 +47,7 @@ import {
 import { markdownToLatex } from './utils/latexMarkdown';
 import { LatexCodeEditor } from './components/LatexCodeEditor';
 import { PdfPreviewPane } from './components/PdfPreviewPane';
+import { LogDrawer, LogDrawerTab } from './components/LogDrawer';
 import { SmartAiModal } from './components/SmartAiModal';
 import { SyncModal } from './components/SyncModal';
 import { CompilerSettingsModal } from './components/CompilerSettingsModal';
@@ -159,6 +161,7 @@ export default function App() {
   const [mobilePane, setMobilePane] = useState<'editor' | 'preview'>('editor');
   const [showSidebar, setShowSidebar] = useState<boolean>(true);
   const [showLog, setShowLog] = useState<boolean>(false);
+  const [logTab, setLogTab] = useState<LogDrawerTab>('bugs');
   const [splitRatio, setSplitRatio] = useState<number>(50);
 
   const [cursorInfo, setCursorInfo] = useState<{
@@ -176,7 +179,10 @@ export default function App() {
     null | 'file' | 'smart' | 'sync' | 'compiler' | 'settings' | 'external-fallback'
   >(null);
 
-  const editorActionsRef = useRef<{ insertAtCursor: (snippet: string) => void } | null>(null);
+  const editorActionsRef = useRef<{
+    insertAtCursor: (snippet: string) => void;
+    jumpToLine?: (lineNumber: number) => void;
+  } | null>(null);
   const splitContainerRef = useRef<HTMLDivElement | null>(null);
   const isResizingRef = useRef(false);
   const sidebarFolderInputRef = useRef<HTMLInputElement | null>(null);
@@ -312,7 +318,13 @@ export default function App() {
   }, [isExternalPreviewWindow, project, compileResult, themeId]);
 
   const handleCompile = useCallback(async (overrideMode?: CompilerMode) => {
-    const effectiveMode = overrideMode || compilerSettings.compilerMode;
+    const baseMode = overrideMode || compilerSettings.compilerMode;
+    const effectiveMode = overrideMode
+      ? overrideMode
+      : inferProjectCompilerMode(project.files, baseMode);
+    if (!overrideMode && effectiveMode !== compilerSettings.compilerMode) {
+      setCompilerSettings((prev) => ({ ...prev, compilerMode: effectiveMode }));
+    }
     setIsCompiling(true);
     try {
       const res = await fetch('/api/compile', {
@@ -338,7 +350,9 @@ export default function App() {
       });
       const data = (await res.json()) as CompileResult;
       setCompileResult(data);
-      if (!data.success) {
+      const hasBugDiagnostics = (data.diagnostics || []).some((d) => d.level === 'error');
+      if (!data.success || hasBugDiagnostics) {
+        setLogTab('bugs');
         setShowLog(true);
       }
     } catch (err) {
@@ -372,7 +386,14 @@ export default function App() {
     if (!isExternalPreviewWindow) {
       lastTargetFileIdRef.current = compileTargetFile?.id;
       detectLocalCompilers(compilerSettings.customBinaryPath);
-      handleCompile();
+      const initialInferred = inferProjectCompilerMode(
+        project.files,
+        compilerSettings.compilerMode
+      );
+      if (initialInferred !== compilerSettings.compilerMode) {
+        setCompilerSettings((prev) => ({ ...prev, compilerMode: initialInferred }));
+      }
+      handleCompile(initialInferred);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -1102,37 +1123,32 @@ Write your document here.
               )}
             </div>
 
-            {/* Collapsible Compiler Log Drawer */}
+            {/* Collapsible Compiler Log & Bugs Drawer */}
             {showLog && compileResult && (
-              <div
-                aria-label="Compiler Output Log"
-                className="h-44 border-t overflow-y-auto p-3 font-mono text-xs shrink-0"
-                style={{
-                  backgroundColor: theme.ui.surface,
-                  borderColor: theme.ui.border,
-                  color: theme.ui.text,
+              <LogDrawer
+                compileResult={compileResult}
+                activeTab={logTab}
+                onChangeTab={setLogTab}
+                onClose={() => setShowLog(false)}
+                onJumpToLine={(line, fileName) => {
+                  if (fileName) {
+                    const target = project.files.find(
+                      (f) => f.name === fileName || f.name.endsWith(`/${fileName}`)
+                    );
+                    if (target && target.id !== activeFile?.id) {
+                      openFileTab(target.id);
+                    }
+                  }
+                  setTimeout(() => {
+                    editorActionsRef.current?.jumpToLine?.(line);
+                  }, 30);
                 }}
-              >
-                <div className="flex items-center justify-between mb-2 gap-2">
-                  <span className="font-semibold truncate">
-                    Compiler Output · {compileResult.engineLabel} · {compileResult.distributionLabel}
-                    {compileResult.generatedFiles && compileResult.generatedFiles.length > 0
-                      ? ` · Artifacts: ${compileResult.generatedFiles.map((f) => f.name).join(', ')}`
-                      : ''}
-                  </span>
-                  <button
-                    type="button"
-                    aria-label="Close compiler log"
-                    onClick={() => setShowLog(false)}
-                    className="p-0.5 rounded hover:opacity-75 shrink-0"
-                  >
-                    <X className="w-3.5 h-3.5" />
-                  </button>
-                </div>
-                <pre className="whitespace-pre-wrap leading-relaxed opacity-90">
-                  {compileResult.rawLog}
-                </pre>
-              </div>
+                onSwitchToXelatex={() => {
+                  setCompilerSettings((prev) => ({ ...prev, compilerMode: 'xelatex' }));
+                  handleCompile('xelatex');
+                }}
+                theme={theme}
+              />
             )}
 
             {/* Quiet Editor Footer */}
@@ -1154,20 +1170,49 @@ Write your document here.
                 <span>Input Script: {keyboardScript.toUpperCase()}</span>
               </div>
 
-              <button
-                type="button"
-                onClick={() => setShowLog((v) => !v)}
-                className="inline-flex items-center gap-1 hover:underline"
-                style={{ color: theme.ui.text }}
-              >
-                <Terminal className="w-3 h-3" />
-                <span>Log</span>
-                {showLog ? (
-                  <ChevronDown className="w-3 h-3" />
-                ) : (
-                  <ChevronUp className="w-3 h-3" />
-                )}
-              </button>
+              {(() => {
+                const errCount = (compileResult?.diagnostics || []).filter(
+                  (d) => d.level === 'error'
+                ).length;
+                const warnCount = (compileResult?.diagnostics || []).filter(
+                  (d) => d.level === 'warning'
+                ).length;
+                return (
+                  <div className="flex items-center gap-3">
+                    {(errCount > 0 || warnCount > 0) && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setLogTab('bugs');
+                          setShowLog(true);
+                        }}
+                        className="inline-flex items-center gap-1.5 font-semibold hover:underline tabular-nums"
+                        style={{ color: errCount > 0 ? '#dc2626' : '#d97706' }}
+                      >
+                        <span>
+                          {errCount > 0 ? `${errCount} bug${errCount > 1 ? 's' : ''}` : ''}
+                          {errCount > 0 && warnCount > 0 ? ' · ' : ''}
+                          {warnCount > 0 ? `${warnCount} warn` : ''}
+                        </span>
+                      </button>
+                    )}
+                    <button
+                      type="button"
+                      onClick={() => setShowLog((v) => !v)}
+                      className="inline-flex items-center gap-1 hover:underline"
+                      style={{ color: theme.ui.text }}
+                    >
+                      <Terminal className="w-3 h-3" />
+                      <span>Log</span>
+                      {showLog ? (
+                        <ChevronDown className="w-3 h-3" />
+                      ) : (
+                        <ChevronUp className="w-3 h-3" />
+                      )}
+                    </button>
+                  </div>
+                );
+              })()}
             </div>
           </section>
 

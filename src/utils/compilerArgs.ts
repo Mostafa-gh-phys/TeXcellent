@@ -63,16 +63,17 @@ export function buildCompilerCliArgs(
   const extraFlags = parseExtraCliArgs(cfg.extraArgs);
 
   if (mode === 'latexmk') {
+    const strippedHint = stripLatexComments(sourceHint || '');
     const hasEngineFlag = extraFlags.some((flag) =>
       /^-(pdf|xelatex|lualatex|dvi|ps|pdflatex)$/.test(flag)
     );
     const engineFlag = hasEngineFlag
       ? null
       : /\\usepackage(?:\[[^\]]*\])?\{[^}]*\b(?:xepersian|fontspec|polyglossia)\b[^}]*\}/i.test(
-            sourceHint
+            strippedHint
           )
         ? '-xelatex'
-        : /\\usepackage(?:\[[^\]]*\])?\{[^}]*\b(?:luacode|luatexja)\b[^}]*\}/i.test(sourceHint)
+        : /\\usepackage(?:\[[^\]]*\])?\{[^}]*\b(?:luacode|luatexja)\b[^}]*\}/i.test(strippedHint)
           ? '-lualatex'
           : '-pdf';
 
@@ -144,13 +145,13 @@ export function resolvePassCount(
 
   // Auto: run 2 passes if cross-references / TOC / labels or bibliography exist
   if (bibTool !== 'none') return 3;
-  if (/\\tableofcontents\b|\\ref\{|\\pageref\{|\\eqref\{|\\listoffigures\b/i.test(source)) {
+  if (/\\tableofcontents\b|\\listoffigures\b|\\listoftables\b|\\ref\{|\\pageref\{|\\eqref\{|\\label\{/i.test(source)) {
     return 2;
   }
   return 1;
 }
 
-function stripLatexComments(source: string): string {
+export function stripLatexComments(source: string): string {
   return source
     .split(/\r?\n/)
     .map((line) => line.replace(/(^|[^\\])%.*$/, '$1'))
@@ -172,4 +173,18 @@ export function inferPreferredCompilerMode(
     return 'xelatex';
   }
   return currentMode;
+}
+
+export function inferProjectCompilerMode(
+  files: ProjectFile[],
+  currentMode: CompilerMode = 'xelatex'
+): CompilerMode {
+  if (currentMode === 'latexmk') {
+    return 'latexmk';
+  }
+  const texCombined = files
+    .filter((f) => /\.(tex|sty|cls|ltx|def|cfg)$/i.test(f.name))
+    .map((f) => stripLatexComments(f.content))
+    .join('\n');
+  return inferPreferredCompilerMode(texCombined, currentMode);
 }

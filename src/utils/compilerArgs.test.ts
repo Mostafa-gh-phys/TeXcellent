@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   buildCompilerCliArgs,
+  inferProjectCompilerMode,
   mergeCompilerSettings,
   parseExtraCliArgs,
   resolveBibliographyTool,
@@ -48,6 +49,14 @@ test('buildCompilerCliArgs builds safe CLI flags for xelatex, pdflatex DVI, and 
   assert.equal(latexmkPersian[0], '-xelatex');
   assert.equal(latexmkPersian.includes('-halt-on-error'), false);
 
+  const latexmkCommented = buildCompilerCliArgs(
+    'latexmk',
+    'main.tex',
+    {},
+    '\\documentclass{article}\n% \\usepackage{xepersian}'
+  );
+  assert.equal(latexmkCommented[0], '-pdf');
+
   const pdfDvi = buildCompilerCliArgs('pdflatex', 'paper.tex', { outputFormat: 'dvi' });
   assert.equal(pdfDvi.includes('-output-format=dvi'), true);
 
@@ -57,10 +66,15 @@ test('buildCompilerCliArgs builds safe CLI flags for xelatex, pdflatex DVI, and 
   assert.equal(sanitizeRelativeTeXPath('../../secret/main.tex'), 'secret/main.tex');
 });
 
-test('resolveBibliographyTool and resolvePassCount detect biblatex/bibtex/refs cleanly', () => {
+test('resolveBibliographyTool, resolvePassCount, and inferProjectCompilerMode handle multi-file projects', () => {
   const bibFiles: ProjectFile[] = [
+    { id: 'main', name: 'main.tex', content: '\\input{preamble}', language: 'latex', updatedAt: '' },
+    { id: 'pre', name: 'preamble.sty', content: '\\usepackage{xepersian}', language: 'style', updatedAt: '' },
     { id: 'bib', name: 'references.bib', content: '', language: 'bibtex', updatedAt: '' },
   ];
+  assert.equal(inferProjectCompilerMode(bibFiles, 'lualatex'), 'xelatex');
+  assert.equal(inferProjectCompilerMode(bibFiles, 'latexmk'), 'latexmk');
+
   const biblatexSrc = '\\usepackage[backend=biber]{biblatex}\n\\addbibresource{references.bib}';
   assert.equal(resolveBibliographyTool(biblatexSrc, bibFiles, 'auto'), 'biber');
   assert.equal(resolvePassCount(biblatexSrc, { compilePasses: 'auto' }, 'biber'), 3);

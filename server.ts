@@ -10,17 +10,20 @@ import crypto from 'node:crypto';
 import { GoogleGenAI, Type } from '@google/genai';
 import { PDFDocument, PDFFont, StandardFonts, rgb } from 'pdf-lib';
 import fontkit from '@pdf-lib/fontkit';
-import { parseLatexDocument, validateLatexBuild } from './src/utils/latexParser';
-import { latexMathToUnicode, shapePersianRunsForPdf } from './src/utils/pdfTextShaper';
+import { inlineProjectInputs, parseLatexDocument, validateLatexBuild } from './src/utils/latexParser';
+import { latexMathToUnicode, splitBidiRunsForFontkit } from './src/utils/pdfTextShaper';
 import {
   buildCompilerCliArgs,
+  inferProjectCompilerMode,
   resolveBibliographyTool,
   resolvePassCount,
   sanitizeRelativeTeXPath,
+  stripLatexComments,
 } from './src/utils/compilerArgs';
 import {
   extractPrimaryTexError,
   normalizeCustomTexPathEntries,
+  parseNativeTexDiagnostics,
   sanitizeTexChildEnv,
 } from './src/utils/texEnv';
 import type {
@@ -307,13 +310,13 @@ async function buildPdfBinaryFromLatex(
     '/usr/share/fonts/truetype/liberation/LiberationMono-Regular.ttf',
   ]);
   const arabicRegularBytes = await readFirstExistingFont([
-    '/usr/share/fonts/truetype/noto/NotoNaskhArabic-Regular.ttf',
     '/usr/share/fonts/truetype/noto/NotoSansArabic-Regular.ttf',
+    '/usr/share/fonts/truetype/noto/NotoNaskhArabic-Regular.ttf',
     '/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf',
   ]);
   const arabicBoldBytes = await readFirstExistingFont([
-    '/usr/share/fonts/truetype/noto/NotoNaskhArabic-Bold.ttf',
     '/usr/share/fonts/truetype/noto/NotoSansArabic-Bold.ttf',
+    '/usr/share/fonts/truetype/noto/NotoNaskhArabic-Bold.ttf',
     '/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf',
   ]);
 
@@ -374,9 +377,9 @@ async function buildPdfBinaryFromLatex(
       };
     }
     if (hasRtl) {
-      const shapedRuns = shapePersianRunsForPdf(clean, rtlHint || hasRtl);
+      const bidiRuns = splitBidiRunsForFontkit(clean, rtlHint || hasRtl);
       return {
-        runs: shapedRuns.map((r) => ({
+        runs: bidiRuns.map((r) => ({
           text: r.text,
           font: r.isRtl
             ? bold
@@ -618,15 +621,30 @@ async function buildPdfBinaryFromLatex(
       }
       for (let rIdx = 0; rIdx < block.rows.length; rIdx++) {
         const row = block.rows[rIdx];
-        drawTextParagraph(row.join('   |   '), {
+        const rowText = row.join('   |   ');
+        drawTextParagraph(rowText, {
           size: 9.5,
           bold: rIdx === 0,
-          mono: !RTL_CHAR_RE.test(row.join(' ')),
+          mono: !RTL_CHAR_RE.test(rowText),
+          rtl: RTL_CHAR_RE.test(rowText),
           align: 'center',
           color: rgb(0.14, 0.17, 0.21),
           lineHeight: 15,
         });
       }
+      y -= 8;
+      continue;
+    }
+    if (block.type === 'figure') {
+      ensureSpace(44);
+      const figLabel = block.caption || block.title || 'Figure';
+      drawTextParagraph(`[Figure: ${figLabel}]`, {
+        size: 9.5,
+        align: 'center',
+        rtl: Boolean(block.rtl),
+        color: rgb(0.32, 0.36, 0.42),
+        lineHeight: 15,
+      });
       y -= 8;
       continue;
     }
@@ -870,7 +888,25 @@ async function startServer() {
 
       // B. Native TeX Live / MiKTeX binary execution if installed on host
       const detectedTex = await detectLocalTexInstallation(customBinaryPath || undefined);
-      const nativeCmd = detectedTex.binaries[mode]?.path || null;
+      const combinedTexContent = files
+        .filter((f) => /\.(tex|sty|cls|ltx|def|cfg)$/i.test(f.name))
+        .map((f) => stripLatexComments(f.content))
+        .join('\n');
+      const inferredMode =
+        mode === 'latexmk' ? 'latexmk' : inferProjectCompilerMode(files, mode);
+      let effectiveMode: CompilerMode = inferredMode;
+      let nativeCmd = detectedTex.binaries[effectiveMode]?.path || null;
+      if (!nativeCmd && effectiveMode === 'latexmk') {
+        const fallbackMode: CompilerMode = /\\usepackage(?:\[[^\]]*\])?\{[^}]*\b(?:xepersian|fontspec|polyglossia)\b[^}]*\}/i.test(
+          combinedTexContent
+        )
+          ? 'xelatex'
+          : 'pdflatex';
+        if (detectedTex.binaries[fallbackMode]?.path) {
+          effectiveMode = fallbackMode;
+          nativeCmd = detectedTex.binaries[fallbackMode]!.path;
+        }
+      }
       if (nativeCmd) {
         const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'texcellent-'));
         try {
@@ -890,10 +926,10 @@ async function startServer() {
           const mainBaseName = path.basename(safeMainRel);
 
           const args = buildCompilerCliArgs(
-            mode,
+            effectiveMode,
             mainBaseName,
             {
-              compilerMode: mode,
+              compilerMode: effectiveMode,
               interactionMode,
               compilePasses,
               bibliographyTool,
@@ -904,13 +940,17 @@ async function startServer() {
               synctex,
               extraArgs,
             },
-            mainFile.content
+            combinedTexContent || mainFile.content
           );
 
-          const resolvedBib = resolveBibliographyTool(mainFile.content, files, bibliographyTool);
+          const resolvedBib = resolveBibliographyTool(
+            combinedTexContent || mainFile.content,
+            files,
+            bibliographyTool
+          );
           const passCount = resolvePassCount(
-            mainFile.content,
-            { compilerMode: mode, compilePasses },
+            combinedTexContent || mainFile.content,
+            { compilerMode: effectiveMode, compilePasses },
             resolvedBib
           );
 
@@ -923,12 +963,12 @@ async function startServer() {
           }
 
           const logChunks: string[] = [];
-          let compileOk = true;
+          let lastPassOk = true;
           const runCmd = async (cmdPath: string, cmdArgs: string[], label: string) => {
             try {
               const out = await execFileAsync(cmdPath, cmdArgs, {
                 cwd: compileCwd,
-                timeout: 60000,
+                timeout: 120000,
                 maxBuffer: 10 * 1024 * 1024,
                 env,
               });
@@ -962,11 +1002,11 @@ async function startServer() {
           };
 
           // Pass 1
-          compileOk = await runCmd(nativeCmd, args, `${mode} (pass 1)`);
-          let producedAfterPass1 = compileOk || (await hasProducedPdf());
+          lastPassOk = await runCmd(nativeCmd, args, `${effectiveMode} (pass 1)`);
+          const producedAfterPass1 = lastPassOk || (await hasProducedPdf());
 
           // Bibliography step (BibTeX / Biber)
-          if (producedAfterPass1 && resolvedBib !== 'none' && mode !== 'latexmk') {
+          if (producedAfterPass1 && resolvedBib !== 'none' && effectiveMode !== 'latexmk') {
             const bibBin = detectedTex.binaries[resolvedBib]?.path;
             if (bibBin) {
               await runCmd(bibBin, [jobBase], resolvedBib);
@@ -974,13 +1014,12 @@ async function startServer() {
           }
 
           // Additional passes for refs/TOC/citations
-          for (let p = 2; p <= passCount && (compileOk || producedAfterPass1); p++) {
-            const passOk = await runCmd(nativeCmd, args, `${mode} (pass ${p})`);
-            compileOk = compileOk && passOk;
+          for (let p = 2; p <= passCount && producedAfterPass1; p++) {
+            lastPassOk = await runCmd(nativeCmd, args, `${effectiveMode} (pass ${p})`);
           }
 
           // Convert DVI -> PDF via dvipdfmx when latex (DVI) was chosen in PDF output mode
-          if (compileOk && mode === 'latex' && outputFormat === 'pdf') {
+          if (lastPassOk && effectiveMode === 'latex' && outputFormat === 'pdf') {
             const dviPath = path.join(customOutDir || compileCwd, `${jobBase}.dvi`);
             const dvipdfmx = detectedTex.binaries.dvipdfmx?.path;
             try {
@@ -1041,6 +1080,12 @@ async function startServer() {
             logChunks.push(`--- ${jobBase}.log (tail) ---\n${dotLog.slice(-4000)}`);
           }
           const combinedLog = logChunks.join('\n\n').trim();
+          const parsedDiagnostics = parseNativeTexDiagnostics(
+            dotLog || combinedLog,
+            effectiveMode,
+            outputFormat,
+            lastPassOk
+          );
 
           if (pdfBytes) {
             let actualPageCount = 1;
@@ -1057,30 +1102,32 @@ async function startServer() {
               filename: pdfName,
               createdAt: Date.now(),
             });
+            const finalDiagnostics =
+              parsedDiagnostics.length > 0
+                ? parsedDiagnostics
+                : [
+                    {
+                      level: 'info' as const,
+                      message: `Compiled cleanly via ${nativeCmd} (${generatedFiles.length} output files)`,
+                    },
+                  ];
             return res.json({
-              success: compileOk,
+              success: lastPassOk,
               compileId,
               pdfUrl: `/api/pdf/${compileId}`,
               durationMs: Date.now() - started,
               pageCount: actualPageCount,
-              engineLabel: mode.toUpperCase(),
+              engineLabel: effectiveMode.toUpperCase(),
               distributionLabel: distTitle,
               backendType: 'native-binary',
               rawLog: combinedLog,
-              diagnostics: [
-                {
-                  level: compileOk ? 'info' : 'error',
-                  message: compileOk
-                    ? `Compiled cleanly via ${nativeCmd} (${generatedFiles.length} output files)`
-                    : extractPrimaryTexError(combinedLog, mode, outputFormat),
-                },
-              ],
+              diagnostics: finalDiagnostics,
               generatedFiles,
               timestamp: new Date().toISOString(),
             });
           }
 
-          const primaryErrorMsg = extractPrimaryTexError(combinedLog, mode, outputFormat);
+          const primaryErrorMsg = extractPrimaryTexError(combinedLog, effectiveMode, outputFormat);
 
           return res.json({
             success: false,
@@ -1088,16 +1135,19 @@ async function startServer() {
             pdfUrl: '',
             durationMs: Date.now() - started,
             pageCount: 0,
-            engineLabel: mode.toUpperCase(),
+            engineLabel: effectiveMode.toUpperCase(),
             distributionLabel: distTitle,
             backendType: 'native-binary',
             rawLog: combinedLog,
-            diagnostics: [
-              {
-                level: 'error',
-                message: primaryErrorMsg,
-              },
-            ],
+            diagnostics:
+              parsedDiagnostics.length > 0
+                ? parsedDiagnostics
+                : [
+                    {
+                      level: 'error',
+                      message: primaryErrorMsg,
+                    },
+                  ],
             generatedFiles,
             timestamp: new Date().toISOString(),
           });
@@ -1107,11 +1157,13 @@ async function startServer() {
       }
 
       // C. Built-in sandbox typesetter + real PDF binary generation
-      const parsed = parseLatexDocument(mainFile.content);
-      const diagnostics = validateLatexBuild(mainFile.content, mode);
+      const inlinedSource = inlineProjectInputs(mainFile.content, files);
+      const effectiveBuiltinMode = inferProjectCompilerMode(files, mode);
+      const parsed = parseLatexDocument(inlinedSource);
+      const diagnostics = validateLatexBuild(inlinedSource, effectiveBuiltinMode);
       const hasError = diagnostics.some((d) => d.level === 'error');
-      const { buffer, pageCount } = await buildPdfBinaryFromLatex(mainFile.content, {
-        mode,
+      const { buffer, pageCount } = await buildPdfBinaryFromLatex(inlinedSource, {
+        mode: effectiveBuiltinMode,
         distribution,
         edition,
         projectName,
@@ -1135,7 +1187,7 @@ async function startServer() {
       const rawLog = formatTexEngineLog(
         distribution,
         edition,
-        mode,
+        effectiveBuiltinMode,
         mainFile.name,
         parsed.packages,
         diagnostics,
@@ -1149,7 +1201,7 @@ async function startServer() {
         pdfUrl: `/api/pdf/${compileId}`,
         durationMs,
         pageCount,
-        engineLabel: mode.toUpperCase(),
+        engineLabel: effectiveBuiltinMode.toUpperCase(),
         distributionLabel: 'Built-in Typesetter',
         backendType: 'built-in-typesetter',
         rawLog,

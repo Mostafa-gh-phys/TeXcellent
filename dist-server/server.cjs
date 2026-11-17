@@ -129114,12 +129114,49 @@ function extractBracedArg(src, startAfterCmd) {
   }
   return { value: src.slice(start, i2 - 1), end: i2 };
 }
-function parseInlineSegments(text, labels = {}) {
+function extractNamedCommandArg(src, cmdName) {
+  const escaped = cmdName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const re = new RegExp(`\\\\${escaped}(?=[^a-zA-Z]|$)`);
+  const m2 = re.exec(src);
+  if (!m2) return null;
+  const arg = extractBracedArg(src, m2.index + m2[0].length);
+  return arg ? arg.value.trim() : null;
+}
+function stripInlineLatexFormatting(text, labels = {}) {
+  if (!text) return "";
+  return parseInlineSegments(text, labels).map((s2) => s2.text).join("").replace(/\s+/g, " ").trim();
+}
+function inlineProjectInputs(mainContent, files, depth = 0) {
+  if (depth > 4 || files.length === 0) return mainContent;
+  return mainContent.replace(/\\(?:input|include)\{([^}]+)\}/g, (full, rawTarget) => {
+    const clean = rawTarget.trim().replace(/^\.\//, "");
+    const withExt = clean.endsWith(".tex") ? clean : `${clean}.tex`;
+    const match2 = files.find((f3) => {
+      const n = f3.name.replace(/^\.\//, "");
+      return n === clean || n === withExt || n.endsWith(`/${clean}`) || n.endsWith(`/${withExt}`);
+    });
+    if (!match2) return full;
+    return inlineProjectInputs(match2.content, files, depth + 1);
+  });
+}
+function getFormattedToday(isRtl) {
+  try {
+    return new Intl.DateTimeFormat(isRtl ? "fa-IR" : "en-US", {
+      year: "numeric",
+      month: "long",
+      day: "numeric"
+    }).format(/* @__PURE__ */ new Date());
+  } catch {
+    return (/* @__PURE__ */ new Date()).toISOString().slice(0, 10);
+  }
+}
+function parseInlineSegments(text, labels = {}, isRtlToday = false) {
   const segments = [];
   let i2 = 0;
   const pushText = (t2) => {
     if (!t2) return;
-    const cleaned = t2.replace(/\\today\b/g, "November 15, 2026").replace(/\\\\/g, "\n").replace(/~/g, " ").replace(/---/g, "\u2014").replace(/--/g, "\u2013").replace(/\\&/g, "&").replace(/\\%/g, "%").replace(/\\_/g, "_");
+    const todayStr = getFormattedToday(isRtlToday);
+    const cleaned = t2.replace(/\\(?:today|PersianToday|latintoday)\b/g, todayStr).replace(/\\\\/g, "\n").replace(/~/g, " ").replace(/---/g, "\u2014").replace(/--/g, "\u2013").replace(/\\&/g, "&").replace(/\\%/g, "%").replace(/\\_/g, "_").replace(/\\\$/g, "$").replace(/\\#/g, "#");
     segments.push({ kind: "text", text: cleaned });
   };
   while (i2 < text.length) {
@@ -129147,7 +129184,10 @@ function parseInlineSegments(text, labels = {}) {
         if (cmd === "textbf" || cmd === "textbf*" || cmd === "bf") {
           const arg = extractBracedArg(text, afterCmd);
           if (arg) {
-            segments.push({ kind: "bold", text: arg.value });
+            segments.push({
+              kind: "bold",
+              text: stripInlineLatexFormatting(arg.value, labels)
+            });
             i2 = arg.end;
             continue;
           }
@@ -129155,7 +129195,10 @@ function parseInlineSegments(text, labels = {}) {
         if (cmd === "textit" || cmd === "emph") {
           const arg = extractBracedArg(text, afterCmd);
           if (arg) {
-            segments.push({ kind: "italic", text: arg.value });
+            segments.push({
+              kind: "italic",
+              text: stripInlineLatexFormatting(arg.value, labels)
+            });
             i2 = arg.end;
             continue;
           }
@@ -129171,28 +129214,62 @@ function parseInlineSegments(text, labels = {}) {
         if (cmd === "underline") {
           const arg = extractBracedArg(text, afterCmd);
           if (arg) {
-            segments.push({ kind: "underline", text: arg.value });
+            segments.push({
+              kind: "underline",
+              text: stripInlineLatexFormatting(arg.value, labels)
+            });
             i2 = arg.end;
             continue;
           }
         }
-        if (cmd === "lr") {
+        if (cmd === "lr" || cmd === "textlatin" || cmd === "LTR") {
           const arg = extractBracedArg(text, afterCmd);
           if (arg) {
-            segments.push({ kind: "lr", text: arg.value });
+            segments.push({
+              kind: "lr",
+              text: stripInlineLatexFormatting(arg.value, labels)
+            });
             i2 = arg.end;
             continue;
           }
         }
-        if (cmd === "rl") {
+        if (cmd === "rl" || cmd === "textpersian" || cmd === "RTL") {
           const arg = extractBracedArg(text, afterCmd);
           if (arg) {
-            segments.push({ kind: "rl", text: arg.value });
+            segments.push({
+              kind: "rl",
+              text: stripInlineLatexFormatting(arg.value, labels)
+            });
             i2 = arg.end;
             continue;
           }
         }
-        if (cmd === "ref" || cmd === "eqref") {
+        if (cmd === "textcolor") {
+          const colorArg = extractBracedArg(text, afterCmd);
+          if (colorArg) {
+            const innerArg = extractBracedArg(text, colorArg.end);
+            if (innerArg) {
+              segments.push({
+                kind: "text",
+                text: stripInlineLatexFormatting(innerArg.value, labels)
+              });
+              i2 = innerArg.end;
+              continue;
+            }
+          }
+        }
+        if (cmd === "footnote" || cmd === "LTRfootnote" || cmd === "RTLfootnote") {
+          const arg = extractBracedArg(text, afterCmd);
+          if (arg) {
+            segments.push({
+              kind: "text",
+              text: ` (${stripInlineLatexFormatting(arg.value, labels)})`
+            });
+            i2 = arg.end;
+            continue;
+          }
+        }
+        if (cmd === "ref" || cmd === "eqref" || cmd === "pageref") {
           const arg = extractBracedArg(text, afterCmd);
           if (arg) {
             const resolved = labels[arg.value] || "?";
@@ -129204,7 +129281,7 @@ function parseInlineSegments(text, labels = {}) {
             continue;
           }
         }
-        if (cmd === "cite" || cmd === "parencite" || cmd === "textcite") {
+        if (cmd === "cite" || cmd === "parencite" || cmd === "textcite" || cmd === "citep" || cmd === "citet") {
           const arg = extractBracedArg(text, afterCmd);
           if (arg) {
             segments.push({ kind: "ref", text: `[${arg.value}]` });
@@ -129217,7 +129294,11 @@ function parseInlineSegments(text, labels = {}) {
           if (urlArg) {
             const labelArg = extractBracedArg(text, urlArg.end);
             if (labelArg) {
-              segments.push({ kind: "link", text: labelArg.value, href: urlArg.value });
+              segments.push({
+                kind: "link",
+                text: stripInlineLatexFormatting(labelArg.value, labels),
+                href: urlArg.value
+              });
               i2 = labelArg.end;
               continue;
             }
@@ -129230,6 +129311,10 @@ function parseInlineSegments(text, labels = {}) {
             i2 = urlArg.end;
             continue;
           }
+        }
+        if (cmd === "KashidaOn" || cmd === "KashidaOff" || cmd === "DefaultMathsDigits" || cmd === "AutoMathsDigits" || cmd === "PersianDigits" || cmd === "LatinDigits" || cmd === "noindent" || cmd === "centering") {
+          i2 = afterCmd;
+          continue;
         }
       }
     }
@@ -129262,13 +129347,15 @@ function parseLatexDocument(source) {
   while ((pm = pkgRegex.exec(clean)) !== null) {
     pm[1].split(",").map((s2) => s2.trim()).filter(Boolean).forEach((p) => packages.push(p));
   }
-  const titleMatch = clean.match(/\\title\{([^}]*)\}/);
-  const authorMatch = clean.match(/\\author\{([^}]*)\}/);
-  const dateMatch = clean.match(/\\date\{([^}]*)\}/);
-  const title = titleMatch?.[1]?.trim() || "";
-  const author = authorMatch?.[1]?.trim() || "";
-  const date = (dateMatch?.[1]?.trim() || "\\today").replace(/\\today/g, "November 15, 2026");
-  const isRtlDocument = packages.includes("xepersian") || /\\setdefaultlanguage\{persian\}|\\setdefaultlanguage\{arabic\}/.test(clean) || hasRtlChar(title);
+  const rawTitle = extractNamedCommandArg(clean, "title") || "";
+  const rawAuthor = extractNamedCommandArg(clean, "author") || "";
+  const rawDate = extractNamedCommandArg(clean, "date") || "\\today";
+  const isRtlDocument = packages.includes("xepersian") || /\\setdefaultlanguage\{persian\}|\\setdefaultlanguage\{arabic\}/.test(clean) || hasRtlChar(rawTitle);
+  const title = stripInlineLatexFormatting(rawTitle);
+  const author = stripInlineLatexFormatting(rawAuthor.replace(/\\and\b/g, " & "));
+  const date = stripInlineLatexFormatting(
+    rawDate.replace(/\\(?:today|PersianToday|latintoday)\b/g, getFormattedToday(isRtlDocument))
+  );
   const beginDoc = clean.indexOf("\\begin{document}");
   const endDoc = clean.lastIndexOf("\\end{document}");
   const body = beginDoc !== -1 ? clean.slice(beginDoc + "\\begin{document}".length, endDoc !== -1 ? endDoc : clean.length) : clean;
@@ -129308,41 +129395,46 @@ function parseLatexDocument(source) {
         continue;
       }
     }
-    if (body.startsWith("\\maketitle", pos) || body.startsWith("\\tableofcontents", pos)) {
-      pos += body.startsWith("\\maketitle", pos) ? 10 : 16;
+    if (body.startsWith("\\maketitle", pos) || body.startsWith("\\tableofcontents", pos) || body.startsWith("\\listoffigures", pos) || body.startsWith("\\listoftables", pos) || body.startsWith("\\printbibliography", pos)) {
+      const m2 = body.slice(pos).match(/^\\[a-zA-Z]+/);
+      pos += m2 ? m2[0].length : 10;
       continue;
     }
-    if (body.startsWith("\\newpage", pos)) {
+    if (body.startsWith("\\newpage", pos) || body.startsWith("\\clearpage", pos) || body.startsWith("\\pagebreak", pos)) {
+      const m2 = body.slice(pos).match(/^\\[a-zA-Z]+/);
       blocks.push({ type: "divider", rtl: false });
-      pos += 8;
+      pos += m2 ? m2[0].length : 8;
       continue;
     }
-    const secMatch = body.slice(pos).match(/^\\(section|subsection|subsubsection)(\*?)/);
+    const secMatch = body.slice(pos).match(/^\\(part|chapter|section|subsection|subsubsection|paragraph)(\*?)/);
     if (secMatch) {
       const arg = extractBracedArg(body, pos + secMatch[0].length);
       if (arg) {
         const starred = secMatch[2] === "*";
+        const kind = secMatch[1];
         let num = "";
         if (!starred) {
-          if (secMatch[1] === "section") {
+          if (kind === "chapter" || kind === "section") {
             secCount++;
             subCount = 0;
             subsubCount = 0;
             num = `${secCount}`;
-          } else if (secMatch[1] === "subsection") {
+          } else if (kind === "subsection") {
             subCount++;
             subsubCount = 0;
             num = `${secCount}.${subCount}`;
-          } else {
+          } else if (kind === "subsubsection") {
             subsubCount++;
             num = `${secCount}.${subCount}.${subsubCount}`;
           }
         }
+        const blockType = kind === "part" || kind === "chapter" || kind === "section" ? "section" : kind === "subsection" ? "subsection" : "subsubsection";
+        const cleanTitle = stripInlineLatexFormatting(arg.value, labels);
         blocks.push({
-          type: secMatch[1],
+          type: blockType,
           number: num || void 0,
-          title: arg.value,
-          rtl: hasRtlChar(arg.value) || isRtlDocument
+          title: cleanTitle,
+          rtl: hasRtlChar(cleanTitle) || isRtlDocument
         });
         pos = arg.end;
         const labelAhead = body.slice(pos).match(/^\s*\\label\{([^}]+)\}/);
@@ -129361,7 +129453,7 @@ function parseLatexDocument(source) {
       if (endIdx !== -1) {
         const inner = body.slice(pos + envStart[0].length, endIdx).trim();
         pos = endIdx + endTag.length;
-        if (envName === "equation" || envName === "equation*" || envName === "align" || envName === "align*" || envName === "gather") {
+        if (envName === "equation" || envName === "equation*" || envName === "align" || envName === "align*" || envName === "gather" || envName === "gather*" || envName === "multline" || envName === "multline*") {
           const cleanMath = inner.replace(/\\label\{([^}]+)\}/g, (_, lbl) => {
             labels[lbl.trim()] = `${blocks.filter((b) => b.type === "display-math").length + 1}`;
             return "";
@@ -129376,49 +129468,53 @@ ${cleanMath}
           continue;
         }
         if (envName === "itemize" || envName === "enumerate") {
-          const rawItems = inner.split(/\\item\b/).map((s2) => s2.trim()).filter(Boolean);
+          const rawItems = inner.split(/\\item(?:\[[^\]]*\])?\b/).map((s2) => s2.trim()).filter(Boolean);
           blocks.push({
             type: envName,
-            items: rawItems.map((it) => parseInlineSegments(it, labels)),
+            items: rawItems.map((it) => parseInlineSegments(it, labels, isRtlDocument)),
             rtl: rawItems.some((it) => hasRtlChar(it)) || isRtlDocument
           });
           continue;
         }
-        if (envName === "table" || envName === "tabular") {
-          const captionMatch = inner.match(/\\caption\{([^}]+)\}/);
+        if (envName === "table" || envName === "tabular" || envName === "longtable") {
+          const captionVal = extractNamedCommandArg(inner, "caption");
           const tabBodyMatch = envName === "table" ? inner.match(/\\begin\{tabular\}\{[^}]*\}([\s\S]*?)\\end\{tabular\}/) : [null, inner];
-          const tabContent = (tabBodyMatch?.[1] || inner).replace(/\\(toprule|midrule|bottomrule|hline)\b/g, "").trim();
-          const rows = tabContent.split(/\\\\/).map((r2) => r2.trim()).filter(Boolean).map((r2) => r2.split("&").map((c) => c.trim()));
+          const tabContent = (tabBodyMatch?.[1] || inner).replace(/\\(toprule|midrule|bottomrule|hline|cline\{[^}]*\})\b/g, "").trim();
+          const rows = tabContent.split(/\\\\/).map((r2) => r2.trim()).filter(Boolean).map(
+            (r2) => r2.split("&").map((c) => stripInlineLatexFormatting(c.replace(/^\$|\$$/g, ""), labels))
+          );
           blocks.push({
             type: "table",
-            caption: captionMatch?.[1],
+            caption: captionVal ? stripInlineLatexFormatting(captionVal, labels) : void 0,
             rows,
             rtl: isRtlDocument && !/\\begin\{latin\}/.test(inner)
           });
           continue;
         }
         if (envName === "figure") {
-          const captionMatch = inner.match(/\\caption\{([^}]+)\}/);
+          const captionVal = extractNamedCommandArg(inner, "caption");
           const imgMatch = inner.match(/\\includegraphics(?:\[[^\]]*\])?\{([^}]+)\}/);
+          const cleanCap = captionVal ? stripInlineLatexFormatting(captionVal, labels) : void 0;
           blocks.push({
             type: "figure",
-            caption: captionMatch?.[1] || imgMatch?.[1] || "Figure",
+            caption: cleanCap || imgMatch?.[1] || "Figure",
             title: imgMatch?.[1] || "graphic",
-            rtl: hasRtlChar(captionMatch?.[1] || "") || isRtlDocument
+            rtl: hasRtlChar(cleanCap || "") || isRtlDocument
           });
           continue;
         }
-        if (envName === "theorem" || envName === "lemma" || envName === "proof" || envName === "tcolorbox") {
+        if (envName === "theorem" || envName === "lemma" || envName === "proof" || envName === "definition" || envName === "corollary" || envName === "proposition" || envName === "remark" || envName === "example" || envName === "tcolorbox") {
           thmCount++;
+          const rtlBlock = hasRtlChar(inner) || isRtlDocument;
           blocks.push({
             type: "theorem",
-            title: envName === "proof" ? isRtlDocument ? "\u0627\u062B\u0628\u0627\u062A" : "Proof" : `${envName.charAt(0).toUpperCase() + envName.slice(1)} ${thmCount}`,
-            segments: parseInlineSegments(inner, labels),
-            rtl: hasRtlChar(inner) || isRtlDocument
+            title: envName === "proof" ? rtlBlock ? "\u0627\u062B\u0628\u0627\u062A" : "Proof" : `${envName.charAt(0).toUpperCase() + envName.slice(1)} ${thmCount}`,
+            segments: parseInlineSegments(inner, labels, isRtlDocument),
+            rtl: rtlBlock
           });
           continue;
         }
-        if (envName === "lstlisting" || envName === "verbatim") {
+        if (envName === "lstlisting" || envName === "verbatim" || envName === "minted") {
           blocks.push({
             type: "code",
             title: inner.replace(/^\[[^\]]*\]/, "").trim(),
@@ -129428,11 +129524,12 @@ ${cleanMath}
         }
         if (envName === "latin" || envName === "persian") {
           const innerRtl = envName === "persian";
-          blocks.push({
-            type: "paragraph",
-            segments: parseInlineSegments(inner, labels),
-            rtl: innerRtl
-          });
+          const subDoc = parseLatexDocument(`\\begin{document}
+${inner}
+\\end{document}`);
+          for (const subBlock of subDoc.blocks) {
+            blocks.push({ ...subBlock, rtl: innerRtl });
+          }
           continue;
         }
         if (envName === "frame") {
@@ -129440,21 +129537,21 @@ ${cleanMath}
           const frameBody = inner.replace(/^\{[^}]+\}/, "").trim();
           blocks.push({
             type: "frame",
-            title: frameTitle,
-            segments: parseInlineSegments(frameBody, labels),
+            title: stripInlineLatexFormatting(frameTitle, labels),
+            segments: parseInlineSegments(frameBody, labels, isRtlDocument),
             rtl: hasRtlChar(frameTitle + frameBody) || isRtlDocument
           });
           continue;
         }
         blocks.push({
           type: "paragraph",
-          segments: parseInlineSegments(inner, labels),
+          segments: parseInlineSegments(inner, labels, isRtlDocument),
           rtl: hasRtlChar(inner) || isRtlDocument
         });
         continue;
       }
     }
-    const nextBlockRegex = /\n\s*\n|\\(section|subsection|subsubsection|begin|newpage|maketitle|tableofcontents)\b|\$\$|\\\[/;
+    const nextBlockRegex = /\n\s*\n|\\(part|chapter|section|subsection|subsubsection|paragraph|begin|newpage|clearpage|pagebreak|maketitle|tableofcontents)\b|\$\$|\\\[/;
     const rest = body.slice(pos);
     const match2 = rest.match(nextBlockRegex);
     let endOffset = match2 && match2.index !== void 0 && match2.index > 0 ? match2.index : rest.length;
@@ -129464,12 +129561,15 @@ ${cleanMath}
     }
     const paraRaw = rest.slice(0, endOffset).trim();
     pos += endOffset;
-    if (paraRaw && !/^\\(label|vspace|hspace|noindent|centering)\b/.test(paraRaw)) {
+    const isPureSetupDirective = /^\\(?:label|vspace|hspace|noindent|centering|vfill|hfill|smallskip|medskip|bigskip|KashidaOn|KashidaOff|DefaultMathsDigits|AutoMathsDigits|PersianDigits|LatinDigits|persiandate|latindate|settextfont|setlatintextfont|setdigitfont|setmathsdigitfont|defpersianfont|deflatinfont|SepMark|bibliographystyle|bibliography|addbibresource|pagestyle|thispagestyle|newtheorem|newcommand|renewcommand|hypersetup)\b/.test(
+      paraRaw
+    );
+    if (paraRaw && !isPureSetupDirective) {
       const cleanedPara = paraRaw.replace(/\n+/g, " ");
       blocks.push({
         type: "paragraph",
-        segments: parseInlineSegments(cleanedPara, labels),
-        rtl: hasRtlChar(cleanedPara) || isRtlDocument && !/^\\lr\{/.test(cleanedPara)
+        segments: parseInlineSegments(cleanedPara, labels, isRtlDocument),
+        rtl: hasRtlChar(cleanedPara) || isRtlDocument && !/^\\(?:lr|textlatin)\{/.test(cleanedPara)
       });
     }
   }
@@ -129522,6 +129622,41 @@ function validateLatexBuild(source, mode, distribution, edition) {
       level: "warning",
       message: "xepersian is officially designed for XeLaTeX; consider switching mode to XeLaTeX for full Kashida & bidi support."
     });
+  }
+  const cleanSource = stripComments(source);
+  const xeIdx = cleanSource.search(/\\usepackage(?:\[[^\]]*\])?\{[^}]*\bxepersian\b[^}]*\}/);
+  if (xeIdx !== -1) {
+    const lineOfXe = source.slice(0, xeIdx).split("\n").length;
+    const mustPrecede = [
+      "amsmath",
+      "amssymb",
+      "amsthm",
+      "booktabs",
+      "geometry",
+      "graphicx",
+      "hyperref",
+      "tikz",
+      "pgfplots",
+      "xcolor",
+      "listings",
+      "tcolorbox",
+      "biblatex"
+    ];
+    const pkgCallRegex = /\\usepackage(?:\[[^\]]*\])?\{([^}]+)\}/g;
+    let mPkg;
+    while ((mPkg = pkgCallRegex.exec(cleanSource)) !== null) {
+      if (mPkg.index > xeIdx) {
+        const laterPkgs = mPkg[1].split(",").map((s2) => s2.trim()).filter((p) => mustPrecede.includes(p));
+        if (laterPkgs.length > 0) {
+          const lineOfLater = source.slice(0, mPkg.index).split("\n").length;
+          diagnostics.push({
+            level: "warning",
+            line: lineOfLater,
+            message: `Package '${laterPkgs.join(", ")}' (line ${lineOfLater}) should be loaded BEFORE \\usepackage{xepersian} (line ${lineOfXe}) to avoid XePersian/bidi conflicts.`
+          });
+        }
+      }
+    }
   }
   if (edition === "basic" && distribution) {
     for (const pkg of parsed.packages) {
@@ -129595,197 +129730,140 @@ function validateLatexBuild(source, mode, distribution, edition) {
 }
 
 // src/utils/pdfTextShaper.ts
-var ARABIC_PERSIAN_FORMS = {
-  "\u0622": { isolated: "\uFE81", final: "\uFE82" },
-  // آ
-  "\u0623": { isolated: "\uFE83", final: "\uFE84" },
-  // أ
-  "\u0624": { isolated: "\uFE85", final: "\uFE86" },
-  // ؤ
-  "\u0625": { isolated: "\uFE87", final: "\uFE88" },
-  // إ
-  "\u0626": { isolated: "\uFE89", final: "\uFE8A", initial: "\uFE8B", medial: "\uFE8C" },
-  // ئ
-  "\u0627": { isolated: "\uFE8D", final: "\uFE8E" },
-  // ا
-  "\u0628": { isolated: "\uFE8F", final: "\uFE90", initial: "\uFE91", medial: "\uFE92" },
-  // ب
-  "\u0629": { isolated: "\uFE93", final: "\uFE94" },
-  // ة
-  "\u062A": { isolated: "\uFE95", final: "\uFE96", initial: "\uFE97", medial: "\uFE98" },
-  // ت
-  "\u062B": { isolated: "\uFE99", final: "\uFE9A", initial: "\uFE9B", medial: "\uFE9C" },
-  // ث
-  "\u062C": { isolated: "\uFE9D", final: "\uFE9E", initial: "\uFE9F", medial: "\uFEA0" },
-  // ج
-  "\u062D": { isolated: "\uFEA1", final: "\uFEA2", initial: "\uFEA3", medial: "\uFEA4" },
-  // ح
-  "\u062E": { isolated: "\uFEA5", final: "\uFEA6", initial: "\uFEA7", medial: "\uFEA8" },
-  // خ
-  "\u062F": { isolated: "\uFEA9", final: "\uFEAA" },
-  // د
-  "\u0630": { isolated: "\uFEAB", final: "\uFEAC" },
-  // ذ
-  "\u0631": { isolated: "\uFEAD", final: "\uFEAE" },
-  // ر
-  "\u0632": { isolated: "\uFEAF", final: "\uFEB0" },
-  // ز
-  "\u0633": { isolated: "\uFEB1", final: "\uFEB2", initial: "\uFEB3", medial: "\uFEB4" },
-  // س
-  "\u0634": { isolated: "\uFEB5", final: "\uFEB6", initial: "\uFEB7", medial: "\uFEB8" },
-  // ش
-  "\u0635": { isolated: "\uFEB9", final: "\uFEBA", initial: "\uFEBB", medial: "\uFEBC" },
-  // ص
-  "\u0636": { isolated: "\uFEBD", final: "\uFEBE", initial: "\uFEBF", medial: "\uFEC0" },
-  // ض
-  "\u0637": { isolated: "\uFEC1", final: "\uFEC2", initial: "\uFEC3", medial: "\uFEC4" },
-  // ط
-  "\u0638": { isolated: "\uFEC5", final: "\uFEC6", initial: "\uFEC7", medial: "\uFEC8" },
-  // ظ
-  "\u0639": { isolated: "\uFEC9", final: "\uFECA", initial: "\uFECB", medial: "\uFECC" },
-  // ع
-  "\u063A": { isolated: "\uFECD", final: "\uFECE", initial: "\uFECF", medial: "\uFED0" },
-  // غ
-  "\u0641": { isolated: "\uFED1", final: "\uFED2", initial: "\uFED3", medial: "\uFED4" },
-  // ف
-  "\u0642": { isolated: "\uFED5", final: "\uFED6", initial: "\uFED7", medial: "\uFED8" },
-  // ق
-  "\u0643": { isolated: "\uFED9", final: "\uFEDA", initial: "\uFEDB", medial: "\uFEDC" },
-  // ك
-  "\u0644": { isolated: "\uFEDD", final: "\uFEDE", initial: "\uFEDF", medial: "\uFEE0" },
-  // ل
-  "\u0645": { isolated: "\uFEE1", final: "\uFEE2", initial: "\uFEE3", medial: "\uFEE4" },
-  // م
-  "\u0646": { isolated: "\uFEE5", final: "\uFEE6", initial: "\uFEE7", medial: "\uFEE8" },
-  // ن
-  "\u0647": { isolated: "\uFEE9", final: "\uFEEA", initial: "\uFEEB", medial: "\uFEEC" },
-  // ه
-  "\u0648": { isolated: "\uFEED", final: "\uFEEE" },
-  // و
-  "\u0649": { isolated: "\uFEEF", final: "\uFEF0" },
-  // ى
-  "\u064A": { isolated: "\uFEF1", final: "\uFEF2", initial: "\uFEF3", medial: "\uFEF4" },
-  // ي
-  // Persian-specific letters
-  "\u067E": { isolated: "\uFB56", final: "\uFB57", initial: "\uFB58", medial: "\uFB59" },
-  // پ
-  "\u0686": { isolated: "\uFB7A", final: "\uFB7B", initial: "\uFB7C", medial: "\uFB7D" },
-  // چ
-  "\u0698": { isolated: "\uFB8A", final: "\uFB8B" },
-  // ژ
-  "\u06A9": { isolated: "\uFB8E", final: "\uFB8F", initial: "\uFB90", medial: "\uFB91" },
-  // ک
-  "\u06AF": { isolated: "\uFB92", final: "\uFB93", initial: "\uFB94", medial: "\uFB95" },
-  // گ
-  "\u06CC": { isolated: "\uFBFC", final: "\uFBFD", initial: "\uFBFE", medial: "\uFBFF" }
-  // ی
-};
-var LAM_ALEF_LIGATURES = {
-  "\u0622": { isolated: "\uFEF5", final: "\uFEF6" },
-  // لآ
-  "\u0623": { isolated: "\uFEF7", final: "\uFEF8" },
-  // لأ
-  "\u0625": { isolated: "\uFEF9", final: "\uFEFA" },
-  // لإ
-  "\u0627": { isolated: "\uFEFB", final: "\uFEFC" }
-  // لا
-};
-var TASHKEEL_REGEX = /[\u064B-\u065F\u0670]/;
 var RTL_CHAR_REGEX2 = /[\u0600-\u06FF\u0750-\u077F\u08A0-\u08FF\uFB50-\uFDFF\uFE70-\uFEFF]/;
-function connectsAfter(ch) {
-  const forms = ARABIC_PERSIAN_FORMS[ch];
-  return Boolean(forms?.initial);
-}
-function connectsBefore(ch) {
-  return Boolean(ARABIC_PERSIAN_FORMS[ch]);
-}
-function shapeArabicWord(word) {
-  const chars = Array.from(word).filter((c) => !TASHKEEL_REGEX.test(c));
-  const shaped = [];
-  for (let i2 = 0; i2 < chars.length; i2++) {
-    const ch = chars[i2];
-    if (ch === "\u200C" || ch === "\u200D") {
-      continue;
-    }
-    if (ch === "\u0644" && i2 + 1 < chars.length && LAM_ALEF_LIGATURES[chars[i2 + 1]]) {
-      const prevChar2 = i2 > 0 ? chars[i2 - 1] : "";
-      const hasPrev = prevChar2 !== "" && prevChar2 !== "\u200C" && connectsAfter(prevChar2);
-      const lig = LAM_ALEF_LIGATURES[chars[i2 + 1]];
-      shaped.push(hasPrev ? lig.final : lig.isolated);
-      i2++;
-      continue;
-    }
-    const forms = ARABIC_PERSIAN_FORMS[ch];
-    if (!forms) {
-      shaped.push(ch);
-      continue;
-    }
-    const prevChar = i2 > 0 ? chars[i2 - 1] : "";
-    const nextChar = i2 + 1 < chars.length ? chars[i2 + 1] : "";
-    const prevJoins = prevChar !== "" && prevChar !== "\u200C" && connectsAfter(prevChar);
-    const nextJoins = nextChar !== "" && nextChar !== "\u200C" && connectsBefore(nextChar);
-    if (prevJoins && nextJoins && forms.medial) {
-      shaped.push(forms.medial);
-    } else if (prevJoins && forms.final) {
-      shaped.push(forms.final);
-    } else if (nextJoins && forms.initial) {
-      shaped.push(forms.initial);
-    } else {
-      shaped.push(forms.isolated);
-    }
-  }
-  return shaped.reverse().join("");
-}
-function shapePersianRunsForPdf(text, baseRtl = RTL_CHAR_REGEX2.test(text)) {
+var PERSIAN_ARABIC_DIGIT_REGEX = /[\u0660-\u0669\u06F0-\u06F9]/;
+function splitBidiRunsForFontkit(text, baseRtl = RTL_CHAR_REGEX2.test(text)) {
   if (!text) return [];
   if (!RTL_CHAR_REGEX2.test(text)) return [{ text, isRtl: false }];
-  const segments = [];
+  const runs = [];
+  const chars = Array.from(text);
   let current = "";
-  let currentRtl = null;
-  for (const ch of Array.from(text)) {
-    const chIsRtl = RTL_CHAR_REGEX2.test(ch) || ch === "\u200C";
-    const chIsLtr = /[A-Za-z0-9\u0370-\u03FF\u2016\u2022\u2100-\u214F\u2190-\u22FF\u27E8-\u27E9\\${}[\]()+\-=<>*/^_|]/.test(
-      ch
-    );
+  let currentKind = null;
+  const flush = () => {
+    if (!current || !currentKind) return;
+    if (currentKind === "space") {
+      runs.push({ text: current, isRtl: false });
+    } else if (currentKind === "rtl") {
+      const fixedDigits = current.replace(
+        /[\u0660-\u0669\u06F0-\u06F9]+/g,
+        (m2) => Array.from(m2).reverse().join("")
+      );
+      runs.push({ text: fixedDigits, isRtl: true });
+    } else {
+      runs.push({ text: current, isRtl: false });
+    }
+    current = "";
+    currentKind = null;
+  };
+  for (let i2 = 0; i2 < chars.length; i2++) {
+    const ch = chars[i2];
     if (ch === " ") {
-      if (currentRtl === null) {
-        currentRtl = baseRtl;
+      if (currentKind !== "space") {
+        flush();
+        currentKind = "space";
       }
       current += ch;
       continue;
     }
-    const nextIsRtl = chIsRtl ? true : chIsLtr ? false : currentRtl ?? baseRtl;
-    if (currentRtl !== null && nextIsRtl !== currentRtl) {
-      segments.push({ isRtl: currentRtl, value: current });
-      current = ch;
-      currentRtl = nextIsRtl;
+    const chIsRtl = RTL_CHAR_REGEX2.test(ch) && !PERSIAN_ARABIC_DIGIT_REGEX.test(ch) || ch === "\u200C";
+    const chIsPersianDigit = PERSIAN_ARABIC_DIGIT_REGEX.test(ch);
+    const chIsLtr = /[A-Za-z0-9\u0370-\u03FF\u2016\u2022\u2100-\u214F\u2190-\u22FF\u27E8-\u27E9\\${}[\]()+*=<>*/^_|]/.test(
+      ch
+    );
+    let nextKind;
+    if (chIsRtl || chIsPersianDigit) {
+      nextKind = "rtl";
+    } else if (chIsLtr) {
+      nextKind = "ltr";
     } else {
-      current += ch;
-      currentRtl = nextIsRtl;
+      const nextNonSpace = chars.slice(i2 + 1).find((c) => c !== " ") || "";
+      const nextLooksLtr = /[A-Za-z0-9\u0370-\u03FF\u2190-\u22FF]/.test(nextNonSpace);
+      if (/^[.:!?,،؛\-–—]$/.test(ch)) {
+        if (nextLooksLtr && (currentKind === "ltr" || ch === "-" || !baseRtl)) {
+          nextKind = "ltr";
+        } else if (baseRtl && !nextLooksLtr) {
+          nextKind = "rtl";
+        } else {
+          nextKind = currentKind === "ltr" && nextLooksLtr ? "ltr" : baseRtl ? "rtl" : "ltr";
+        }
+      } else {
+        nextKind = currentKind === "ltr" ? "ltr" : baseRtl ? "rtl" : "ltr";
+      }
     }
+    if (currentKind !== nextKind) {
+      flush();
+      currentKind = nextKind;
+    }
+    current += ch;
   }
-  if (current) {
-    segments.push({ isRtl: currentRtl ?? baseRtl, value: current });
+  flush();
+  const merged = [];
+  for (let i2 = 0; i2 < runs.length; i2++) {
+    const prev = merged[merged.length - 1];
+    const curr = runs[i2];
+    const next = runs[i2 + 1];
+    if (prev && prev.text.trim() !== "" && curr.text.trim() === "" && next && next.text.trim() !== "" && prev.isRtl === next.isRtl) {
+      prev.text = `${prev.text}${curr.text}${next.text}`;
+      i2++;
+      continue;
+    }
+    merged.push(curr);
   }
-  const renderedRuns = segments.map((seg) => {
-    if (!seg.isRtl) return { text: seg.value, isRtl: false };
-    const parts = seg.value.split(/( +)/);
-    const shapedParts = parts.map((p) => RTL_CHAR_REGEX2.test(p) ? shapeArabicWord(p) : p);
-    return { text: shapedParts.reverse().join(""), isRtl: true };
-  });
-  if (baseRtl) {
-    return renderedRuns.reverse();
+  return baseRtl ? merged.reverse() : merged;
+}
+var SUPERSCRIPT_MAP = {
+  "0": "\u2070",
+  "1": "\xB9",
+  "2": "\xB2",
+  "3": "\xB3",
+  "4": "\u2074",
+  "5": "\u2075",
+  "6": "\u2076",
+  "7": "\u2077",
+  "8": "\u2078",
+  "9": "\u2079",
+  "+": "\u207A",
+  "-": "\u207B",
+  "=": "\u207C",
+  "(": "\u207D",
+  ")": "\u207E",
+  n: "\u207F",
+  i: "\u2071"
+};
+var SUBSCRIPT_MAP = {
+  "0": "\u2080",
+  "1": "\u2081",
+  "2": "\u2082",
+  "3": "\u2083",
+  "4": "\u2084",
+  "5": "\u2085",
+  "6": "\u2086",
+  "7": "\u2087",
+  "8": "\u2088",
+  "9": "\u2089",
+  "+": "\u208A",
+  "-": "\u208B",
+  "=": "\u208C",
+  "(": "\u208D",
+  ")": "\u208E"
+};
+function mapDigitsScript(raw, map, fallbackPrefix) {
+  const chars = Array.from(raw);
+  if (chars.every((c) => Boolean(map[c]))) {
+    return chars.map((c) => map[c]).join("");
   }
-  return renderedRuns;
+  return `${fallbackPrefix}(${raw})`;
 }
 var LATEX_MATH_GLYPHS = [
   [/\\leqslant/g, "\u2264"],
   [/\\geqslant/g, "\u2265"],
-  [/\\leq/g, "\u2264"],
-  [/\\geq/g, "\u2265"],
-  [/\\neq/g, "\u2260"],
+  [/\\leq\b|\\le\b/g, "\u2264"],
+  [/\\geq\b|\\ge\b/g, "\u2265"],
+  [/\\neq\b|\\ne\b/g, "\u2260"],
   [/\\approx/g, "\u2248"],
   [/\\equiv/g, "\u2261"],
+  [/\\sim\b/g, "\u223C"],
+  [/\\propto/g, "\u221D"],
   [/\\langle/g, "\u27E8"],
   [/\\rangle/g, "\u27E9"],
   [/\\infty/g, "\u221E"],
@@ -129797,16 +129875,23 @@ var LATEX_MATH_GLYPHS = [
   [/\\nabla/g, "\u2207"],
   [/\\cdot/g, "\xB7"],
   [/\\times/g, "\xD7"],
+  [/\\div/g, "\xF7"],
   [/\\pm/g, "\xB1"],
+  [/\\mp/g, "\u2213"],
+  [/\\top\b/g, "\u1D40"],
+  [/\\mapsto/g, "\u21A6"],
   [/\\to\b|\\rightarrow/g, "\u2192"],
   [/\\leftarrow/g, "\u2190"],
   [/\\Rightarrow/g, "\u21D2"],
+  [/\\Leftrightarrow|\\iff/g, "\u21D4"],
   [/\\in\b/g, "\u2208"],
   [/\\notin\b/g, "\u2209"],
-  [/\\subset/g, "\u2282"],
   [/\\subseteq/g, "\u2286"],
+  [/\\subset/g, "\u2282"],
   [/\\cup/g, "\u222A"],
   [/\\cap/g, "\u2229"],
+  [/\\setminus/g, "\u2216"],
+  [/\\emptyset|\\varnothing/g, "\u2205"],
   [/\\forall/g, "\u2200"],
   [/\\exists/g, "\u2203"],
   [/\\alpha/g, "\u03B1"],
@@ -129814,26 +129899,43 @@ var LATEX_MATH_GLYPHS = [
   [/\\gamma/g, "\u03B3"],
   [/\\delta/g, "\u03B4"],
   [/\\epsilon|\\varepsilon/g, "\u03B5"],
+  [/\\zeta/g, "\u03B6"],
+  [/\\eta/g, "\u03B7"],
   [/\\theta/g, "\u03B8"],
+  [/\\iota/g, "\u03B9"],
+  [/\\kappa/g, "\u03BA"],
   [/\\lambda/g, "\u03BB"],
   [/\\mu/g, "\u03BC"],
+  [/\\nu/g, "\u03BD"],
+  [/\\xi/g, "\u03BE"],
   [/\\pi/g, "\u03C0"],
+  [/\\rho/g, "\u03C1"],
   [/\\sigma/g, "\u03C3"],
+  [/\\tau/g, "\u03C4"],
   [/\\phi|\\varphi/g, "\u03C6"],
+  [/\\chi/g, "\u03C7"],
+  [/\\psi/g, "\u03C8"],
   [/\\omega/g, "\u03C9"],
   [/\\Delta/g, "\u0394"],
+  [/\\Gamma/g, "\u0393"],
+  [/\\Lambda/g, "\u039B"],
+  [/\\Phi/g, "\u03A6"],
+  [/\\Psi/g, "\u03A8"],
   [/\\Sigma/g, "\u03A3"],
   [/\\Omega/g, "\u03A9"],
   [/\\\|/g, "\u2016"],
+  [/\\lVert|\\rVert/g, "\u2016"],
   [/\\left|\\right/g, ""],
-  [/\\,/g, " "]
+  [/\\[,;:!]/g, " "],
+  [/\\quad|\\qquad/g, "  "],
+  [/\\(sin|cos|tan|cot|sec|csc|log|ln|exp|lim|sup|inf|max|min|det|dim|ker|arg|deg)\b/g, "$1"]
 ];
 function latexMathToUnicode(math) {
   let out = math;
   for (const [pattern, replacement] of LATEX_MATH_GLYPHS) {
     out = out.replace(pattern, replacement);
   }
-  out = out.replace(/\\text\{([^}]*)\}/g, "$1").replace(/\\mathcal\{([^}]*)\}/g, "$1").replace(/\\mathbb\{R\}/g, "\u211D").replace(/\\mathbb\{N\}/g, "\u2115").replace(/\\mathbb\{Z\}/g, "\u2124").replace(/\\mathbb\{C\}/g, "\u2102").replace(/\\frac\{([^}]*)\}\{([^}]*)\}/g, "($1)/($2)").replace(/⟨\s+/g, "\u27E8").replace(/\s+⟩/g, "\u27E9").replace(/\s+/g, " ").trim();
+  out = out.replace(/\\(?:text|mathrm|mathbf|mathit|mathcal|operatorname|boldsymbol)\{([^}]*)\}/g, "$1").replace(/\\(?:hat|bar|vec|tilde|overline)\{([^}]*)\}/g, "$1").replace(/\\mathbb\{R\}/g, "\u211D").replace(/\\mathbb\{N\}/g, "\u2115").replace(/\\mathbb\{Z\}/g, "\u2124").replace(/\\mathbb\{Q\}/g, "\u211A").replace(/\\mathbb\{C\}/g, "\u2102").replace(/\\mathbb\{([A-Z])\}/g, "$1").replace(/\\d?frac\{([^}]*)\}\{([^}]*)\}/g, "($1)/($2)").replace(/\\binom\{([^}]*)\}\{([^}]*)\}/g, "C($1, $2)").replace(/√\{([^{}]{1,2})\}/g, "\u221A$1").replace(/√\{([^}]*)\}/g, "\u221A($1)").replace(/\^([0-9ni])/g, (_, ch) => SUPERSCRIPT_MAP[ch] || `^${ch}`).replace(/_([0-9])/g, (_, ch) => SUBSCRIPT_MAP[ch] || `_${ch}`).replace(/\^\{([^}]*)\}/g, (_, g1) => mapDigitsScript(g1, SUPERSCRIPT_MAP, "^")).replace(/_\{([^}]*)\}/g, (_, g1) => mapDigitsScript(g1, SUBSCRIPT_MAP, "_")).replace(/⟨\s+/g, "\u27E8").replace(/\s+⟩/g, "\u27E9").replace(/\s+/g, " ").trim();
   return out;
 }
 
@@ -129873,12 +129975,13 @@ function buildCompilerCliArgs(mode, mainFileName, settings = {}, sourceHint = ""
   const safeMain = sanitizeRelativeTeXPath(mainFileName);
   const extraFlags = parseExtraCliArgs(cfg.extraArgs);
   if (mode === "latexmk") {
+    const strippedHint = stripLatexComments(sourceHint || "");
     const hasEngineFlag = extraFlags.some(
       (flag) => /^-(pdf|xelatex|lualatex|dvi|ps|pdflatex)$/.test(flag)
     );
     const engineFlag = hasEngineFlag ? null : /\\usepackage(?:\[[^\]]*\])?\{[^}]*\b(?:xepersian|fontspec|polyglossia)\b[^}]*\}/i.test(
-      sourceHint
-    ) ? "-xelatex" : /\\usepackage(?:\[[^\]]*\])?\{[^}]*\b(?:luacode|luatexja)\b[^}]*\}/i.test(sourceHint) ? "-lualatex" : "-pdf";
+      strippedHint
+    ) ? "-xelatex" : /\\usepackage(?:\[[^\]]*\])?\{[^}]*\b(?:luacode|luatexja)\b[^}]*\}/i.test(strippedHint) ? "-lualatex" : "-pdf";
     const args2 = engineFlag ? [engineFlag, `-interaction=${cfg.interactionMode}`] : [`-interaction=${cfg.interactionMode}`];
     if (cfg.fileLineError) args2.push("-file-line-error");
     if (cfg.haltOnError) args2.push("-halt-on-error");
@@ -129930,10 +130033,30 @@ function resolvePassCount(source, settings = {}, bibTool = "none") {
   if (cfg.compilePasses === "2") return 2;
   if (cfg.compilePasses === "3") return 3;
   if (bibTool !== "none") return 3;
-  if (/\\tableofcontents\b|\\ref\{|\\pageref\{|\\eqref\{|\\listoffigures\b/i.test(source)) {
+  if (/\\tableofcontents\b|\\listoffigures\b|\\listoftables\b|\\ref\{|\\pageref\{|\\eqref\{|\\label\{/i.test(source)) {
     return 2;
   }
   return 1;
+}
+function stripLatexComments(source) {
+  return source.split(/\r?\n/).map((line) => line.replace(/(^|[^\\])%.*$/, "$1")).join("\n");
+}
+function inferPreferredCompilerMode(source, currentMode = "xelatex") {
+  const stripped = stripLatexComments(source || "");
+  if (/\\usepackage(?:\[[^\]]*\])?\{[^}]*\bxepersian\b[^}]*\}/i.test(stripped)) {
+    return "xelatex";
+  }
+  if ((currentMode === "pdflatex" || currentMode === "latex") && /\\usepackage(?:\[[^\]]*\])?\{[^}]*\b(?:fontspec|polyglossia)\b[^}]*\}/i.test(stripped)) {
+    return "xelatex";
+  }
+  return currentMode;
+}
+function inferProjectCompilerMode(files, currentMode = "xelatex") {
+  if (currentMode === "latexmk") {
+    return "latexmk";
+  }
+  const texCombined = files.filter((f3) => /\.(tex|sty|cls|ltx|def|cfg)$/i.test(f3.name)).map((f3) => stripLatexComments(f3.content)).join("\n");
+  return inferPreferredCompilerMode(texCombined, currentMode);
 }
 
 // src/utils/texEnv.ts
@@ -129955,6 +130078,16 @@ function isAppImageMountValue(value, appDir) {
   if (appDir && value.includes(appDir)) return true;
   return false;
 }
+function filterPathListVar(env2, key, appDir) {
+  const raw = env2[key];
+  if (!raw) return;
+  const cleaned = raw.split(import_node_path2.default.delimiter).filter((entry) => entry && !isAppImageMountValue(entry, appDir));
+  if (cleaned.length > 0) {
+    env2[key] = cleaned.join(import_node_path2.default.delimiter);
+  } else {
+    delete env2[key];
+  }
+}
 function sanitizeTexChildEnv(baseEnv, extraDirs = [], texRootDir) {
   const env2 = { ...baseEnv };
   const appDir = env2.APPDIR || "";
@@ -129970,22 +130103,22 @@ function sanitizeTexChildEnv(baseEnv, extraDirs = [], texRootDir) {
     } else {
       delete env2.LD_LIBRARY_PATH;
     }
-  } else if (env2.LD_LIBRARY_PATH) {
-    const cleaned = env2.LD_LIBRARY_PATH.split(import_node_path2.default.delimiter).filter(
-      (entry) => entry && !isAppImageMountValue(entry, appDir)
-    );
-    if (cleaned.length > 0) {
-      env2.LD_LIBRARY_PATH = cleaned.join(import_node_path2.default.delimiter);
-    } else {
-      delete env2.LD_LIBRARY_PATH;
-    }
+  } else {
+    filterPathListVar(env2, "LD_LIBRARY_PATH", appDir);
+  }
+  for (const listKey of ["XDG_DATA_DIRS", "XDG_CONFIG_DIRS", "PERL5LIB", "PERLLIB", "PYTHONPATH"]) {
+    filterPathListVar(env2, listKey, appDir);
   }
   for (const key of [
     "LD_PRELOAD",
     "GSETTINGS_SCHEMA_DIR",
     "GTK_PATH",
     "GDK_PIXBUF_MODULEDIR",
-    "QT_PLUGIN_PATH"
+    "QT_PLUGIN_PATH",
+    "QT_QPA_PLATFORM_PLUGIN_PATH",
+    "FONTCONFIG_PATH",
+    "FONTCONFIG_FILE",
+    "PYTHONHOME"
   ]) {
     const val = env2[key];
     if (val && isAppImageMountValue(val, appDir)) {
@@ -130057,6 +130190,82 @@ function extractPrimaryTexError(combinedLog, mode, outputFormat = "pdf") {
     return `Compiled in ${outputFormat.toUpperCase()} mode without PDF output.`;
   }
   return "Native compiler halted before producing a PDF file.";
+}
+function parseNativeTexDiagnostics(combinedLog, mode, outputFormat = "pdf", compileOk = true) {
+  const entries = [];
+  const seen = /* @__PURE__ */ new Set();
+  const lines = combinedLog.split(/\r?\n/);
+  const pushEntry = (entry) => {
+    const key = `${entry.level}:${entry.file || ""}:${entry.line || ""}:${entry.message}`;
+    if (!seen.has(key)) {
+      seen.add(key);
+      entries.push(entry);
+    }
+  };
+  for (let i2 = 0; i2 < lines.length; i2++) {
+    const rawLine = lines[i2].trim();
+    if (!rawLine) continue;
+    const flMatch = rawLine.match(/^(?:\.\/)?([^\s:]+\.(?:tex|sty|cls|ltx)):(\d+):\s*(.+)$/);
+    if (flMatch) {
+      pushEntry({
+        level: "error",
+        file: import_node_path2.default.basename(flMatch[1]),
+        line: Number(flMatch[2]),
+        message: flMatch[3].trim()
+      });
+      continue;
+    }
+    if (rawLine.startsWith("! ")) {
+      let msg = rawLine.slice(2).trim();
+      let foundLine;
+      for (let j = i2 + 1; j < Math.min(lines.length, i2 + 6); j++) {
+        const lMatch = lines[j].trim().match(/^l\.(\d+)\b/);
+        if (lMatch) {
+          foundLine = Number(lMatch[1]);
+          break;
+        }
+      }
+      if (/xepersian/i.test(msg) && mode !== "xelatex") {
+        msg = `Package xepersian requires XeLaTeX (current mode: ${mode.toUpperCase()}). ${msg}`;
+      }
+      pushEntry({
+        level: "error",
+        line: foundLine,
+        message: msg
+      });
+      continue;
+    }
+    const warnMatch = rawLine.match(
+      /^(?:LaTeX|Package\s+[A-Za-z0-9_-]+|Class\s+[A-Za-z0-9_-]+)\s+Warning:\s*(.+)$/i
+    );
+    if (warnMatch) {
+      let fullWarn = rawLine;
+      if (i2 + 1 < lines.length && /^\([A-Za-z0-9_-]+\)\s+/.test(lines[i2 + 1].trim())) {
+        fullWarn += " " + lines[i2 + 1].trim().replace(/^\([^)]+\)\s+/, "");
+      }
+      const lineRef = fullWarn.match(/on input line (\d+)/i);
+      pushEntry({
+        level: "warning",
+        line: lineRef ? Number(lineRef[1]) : void 0,
+        message: fullWarn.trim()
+      });
+      continue;
+    }
+    const fontWarnMatch = rawLine.match(/^(Package fontspec Info|! Package fontspec Error):\s*(.+)$/i);
+    if (fontWarnMatch && /cannot be found/i.test(rawLine)) {
+      pushEntry({
+        level: "error",
+        message: fontWarnMatch[2].trim()
+      });
+    }
+  }
+  if (!compileOk && !entries.some((e2) => e2.level === "error")) {
+    pushEntry({
+      level: "error",
+      message: extractPrimaryTexError(combinedLog, mode, outputFormat)
+    });
+  }
+  return entries.slice(0, 80);
 }
 
 // server.ts
@@ -130273,13 +130482,13 @@ async function buildPdfBinaryFromLatex(source, meta) {
     "/usr/share/fonts/truetype/liberation/LiberationMono-Regular.ttf"
   ]);
   const arabicRegularBytes = await readFirstExistingFont([
-    "/usr/share/fonts/truetype/noto/NotoNaskhArabic-Regular.ttf",
     "/usr/share/fonts/truetype/noto/NotoSansArabic-Regular.ttf",
+    "/usr/share/fonts/truetype/noto/NotoNaskhArabic-Regular.ttf",
     "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"
   ]);
   const arabicBoldBytes = await readFirstExistingFont([
-    "/usr/share/fonts/truetype/noto/NotoNaskhArabic-Bold.ttf",
     "/usr/share/fonts/truetype/noto/NotoSansArabic-Bold.ttf",
+    "/usr/share/fonts/truetype/noto/NotoNaskhArabic-Bold.ttf",
     "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"
   ]);
   const hasUnicodeFont = Boolean(latinRegularBytes);
@@ -130316,9 +130525,9 @@ async function buildPdfBinaryFromLatex(source, meta) {
       };
     }
     if (hasRtl) {
-      const shapedRuns = shapePersianRunsForPdf(clean, rtlHint || hasRtl);
+      const bidiRuns = splitBidiRunsForFontkit(clean, rtlHint || hasRtl);
       return {
-        runs: shapedRuns.map((r2) => ({
+        runs: bidiRuns.map((r2) => ({
           text: r2.text,
           font: r2.isRtl ? bold ? fontRtlBold : fontRtlRegular : bold ? fontBold : fontRegular
         })),
@@ -130522,15 +130731,30 @@ async function buildPdfBinaryFromLatex(source, meta) {
       }
       for (let rIdx = 0; rIdx < block.rows.length; rIdx++) {
         const row = block.rows[rIdx];
-        drawTextParagraph(row.join("   |   "), {
+        const rowText = row.join("   |   ");
+        drawTextParagraph(rowText, {
           size: 9.5,
           bold: rIdx === 0,
-          mono: !RTL_CHAR_RE.test(row.join(" ")),
+          mono: !RTL_CHAR_RE.test(rowText),
+          rtl: RTL_CHAR_RE.test(rowText),
           align: "center",
           color: (0, import_pdf_lib.rgb)(0.14, 0.17, 0.21),
           lineHeight: 15
         });
       }
+      y -= 8;
+      continue;
+    }
+    if (block.type === "figure") {
+      ensureSpace(44);
+      const figLabel = block.caption || block.title || "Figure";
+      drawTextParagraph(`[Figure: ${figLabel}]`, {
+        size: 9.5,
+        align: "center",
+        rtl: Boolean(block.rtl),
+        color: (0, import_pdf_lib.rgb)(0.32, 0.36, 0.42),
+        lineHeight: 15
+      });
       y -= 8;
       continue;
     }
@@ -130719,7 +130943,19 @@ async function startServer() {
         }
       }
       const detectedTex = await detectLocalTexInstallation(customBinaryPath || void 0);
-      const nativeCmd = detectedTex.binaries[mode]?.path || null;
+      const combinedTexContent = files.filter((f3) => /\.(tex|sty|cls|ltx|def|cfg)$/i.test(f3.name)).map((f3) => stripLatexComments(f3.content)).join("\n");
+      const inferredMode = mode === "latexmk" ? "latexmk" : inferProjectCompilerMode(files, mode);
+      let effectiveMode = inferredMode;
+      let nativeCmd = detectedTex.binaries[effectiveMode]?.path || null;
+      if (!nativeCmd && effectiveMode === "latexmk") {
+        const fallbackMode = /\\usepackage(?:\[[^\]]*\])?\{[^}]*\b(?:xepersian|fontspec|polyglossia)\b[^}]*\}/i.test(
+          combinedTexContent
+        ) ? "xelatex" : "pdflatex";
+        if (detectedTex.binaries[fallbackMode]?.path) {
+          effectiveMode = fallbackMode;
+          nativeCmd = detectedTex.binaries[fallbackMode].path;
+        }
+      }
       if (nativeCmd) {
         const tmpDir = await import_promises3.default.mkdtemp(import_node_path3.default.join(import_node_os.default.tmpdir(), "texcellent-"));
         try {
@@ -130735,10 +130971,10 @@ async function startServer() {
           const compileCwd = mainRelDir && mainRelDir !== "." ? import_node_path3.default.join(tmpDir, mainRelDir) : tmpDir;
           const mainBaseName = import_node_path3.default.basename(safeMainRel);
           const args = buildCompilerCliArgs(
-            mode,
+            effectiveMode,
             mainBaseName,
             {
-              compilerMode: mode,
+              compilerMode: effectiveMode,
               interactionMode,
               compilePasses,
               bibliographyTool,
@@ -130749,12 +130985,16 @@ async function startServer() {
               synctex,
               extraArgs
             },
-            mainFile.content
+            combinedTexContent || mainFile.content
           );
-          const resolvedBib = resolveBibliographyTool(mainFile.content, files, bibliographyTool);
+          const resolvedBib = resolveBibliographyTool(
+            combinedTexContent || mainFile.content,
+            files,
+            bibliographyTool
+          );
           const passCount = resolvePassCount(
-            mainFile.content,
-            { compilerMode: mode, compilePasses },
+            combinedTexContent || mainFile.content,
+            { compilerMode: effectiveMode, compilePasses },
             resolvedBib
           );
           const outDirFlag = args.find((a) => a.startsWith("-output-directory="));
@@ -130763,12 +131003,12 @@ async function startServer() {
             await import_promises3.default.mkdir(customOutDir, { recursive: true });
           }
           const logChunks = [];
-          let compileOk = true;
+          let lastPassOk = true;
           const runCmd = async (cmdPath, cmdArgs, label) => {
             try {
               const out = await execFileAsync(cmdPath, cmdArgs, {
                 cwd: compileCwd,
-                timeout: 6e4,
+                timeout: 12e4,
                 maxBuffer: 10 * 1024 * 1024,
                 env: env2
               });
@@ -130800,19 +131040,18 @@ ${e2.stdout.trim()}`);
             }
             return false;
           };
-          compileOk = await runCmd(nativeCmd, args, `${mode} (pass 1)`);
-          let producedAfterPass1 = compileOk || await hasProducedPdf();
-          if (producedAfterPass1 && resolvedBib !== "none" && mode !== "latexmk") {
+          lastPassOk = await runCmd(nativeCmd, args, `${effectiveMode} (pass 1)`);
+          const producedAfterPass1 = lastPassOk || await hasProducedPdf();
+          if (producedAfterPass1 && resolvedBib !== "none" && effectiveMode !== "latexmk") {
             const bibBin = detectedTex.binaries[resolvedBib]?.path;
             if (bibBin) {
               await runCmd(bibBin, [jobBase], resolvedBib);
             }
           }
-          for (let p = 2; p <= passCount && (compileOk || producedAfterPass1); p++) {
-            const passOk = await runCmd(nativeCmd, args, `${mode} (pass ${p})`);
-            compileOk = compileOk && passOk;
+          for (let p = 2; p <= passCount && producedAfterPass1; p++) {
+            lastPassOk = await runCmd(nativeCmd, args, `${effectiveMode} (pass ${p})`);
           }
-          if (compileOk && mode === "latex" && outputFormat === "pdf") {
+          if (lastPassOk && effectiveMode === "latex" && outputFormat === "pdf") {
             const dviPath = import_node_path3.default.join(customOutDir || compileCwd, `${jobBase}.dvi`);
             const dvipdfmx = detectedTex.binaries.dvipdfmx?.path;
             try {
@@ -130860,6 +131099,12 @@ ${e2.stdout.trim()}`);
 ${dotLog.slice(-4e3)}`);
           }
           const combinedLog = logChunks.join("\n\n").trim();
+          const parsedDiagnostics = parseNativeTexDiagnostics(
+            dotLog || combinedLog,
+            effectiveMode,
+            outputFormat,
+            lastPassOk
+          );
           if (pdfBytes) {
             let actualPageCount = 1;
             try {
@@ -130874,38 +131119,39 @@ ${dotLog.slice(-4e3)}`);
               filename: pdfName,
               createdAt: Date.now()
             });
+            const finalDiagnostics = parsedDiagnostics.length > 0 ? parsedDiagnostics : [
+              {
+                level: "info",
+                message: `Compiled cleanly via ${nativeCmd} (${generatedFiles.length} output files)`
+              }
+            ];
             return res.json({
-              success: compileOk,
+              success: lastPassOk,
               compileId: compileId2,
               pdfUrl: `/api/pdf/${compileId2}`,
               durationMs: Date.now() - started,
               pageCount: actualPageCount,
-              engineLabel: mode.toUpperCase(),
+              engineLabel: effectiveMode.toUpperCase(),
               distributionLabel: distTitle,
               backendType: "native-binary",
               rawLog: combinedLog,
-              diagnostics: [
-                {
-                  level: compileOk ? "info" : "error",
-                  message: compileOk ? `Compiled cleanly via ${nativeCmd} (${generatedFiles.length} output files)` : extractPrimaryTexError(combinedLog, mode, outputFormat)
-                }
-              ],
+              diagnostics: finalDiagnostics,
               generatedFiles,
               timestamp: (/* @__PURE__ */ new Date()).toISOString()
             });
           }
-          const primaryErrorMsg = extractPrimaryTexError(combinedLog, mode, outputFormat);
+          const primaryErrorMsg = extractPrimaryTexError(combinedLog, effectiveMode, outputFormat);
           return res.json({
             success: false,
             compileId: "none",
             pdfUrl: "",
             durationMs: Date.now() - started,
             pageCount: 0,
-            engineLabel: mode.toUpperCase(),
+            engineLabel: effectiveMode.toUpperCase(),
             distributionLabel: distTitle,
             backendType: "native-binary",
             rawLog: combinedLog,
-            diagnostics: [
+            diagnostics: parsedDiagnostics.length > 0 ? parsedDiagnostics : [
               {
                 level: "error",
                 message: primaryErrorMsg
@@ -130919,11 +131165,13 @@ ${dotLog.slice(-4e3)}`);
           });
         }
       }
-      const parsed = parseLatexDocument(mainFile.content);
-      const diagnostics = validateLatexBuild(mainFile.content, mode);
+      const inlinedSource = inlineProjectInputs(mainFile.content, files);
+      const effectiveBuiltinMode = inferProjectCompilerMode(files, mode);
+      const parsed = parseLatexDocument(inlinedSource);
+      const diagnostics = validateLatexBuild(inlinedSource, effectiveBuiltinMode);
       const hasError = diagnostics.some((d) => d.level === "error");
-      const { buffer, pageCount } = await buildPdfBinaryFromLatex(mainFile.content, {
-        mode,
+      const { buffer, pageCount } = await buildPdfBinaryFromLatex(inlinedSource, {
+        mode: effectiveBuiltinMode,
         distribution,
         edition,
         projectName
@@ -130943,7 +131191,7 @@ ${dotLog.slice(-4e3)}`);
       const rawLog = formatTexEngineLog(
         distribution,
         edition,
-        mode,
+        effectiveBuiltinMode,
         mainFile.name,
         parsed.packages,
         diagnostics,
@@ -130956,7 +131204,7 @@ ${dotLog.slice(-4e3)}`);
         pdfUrl: `/api/pdf/${compileId}`,
         durationMs,
         pageCount,
-        engineLabel: mode.toUpperCase(),
+        engineLabel: effectiveBuiltinMode.toUpperCase(),
         distributionLabel: "Built-in Typesetter",
         backendType: "built-in-typesetter",
         rawLog,

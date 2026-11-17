@@ -88,7 +88,9 @@ export const PdfBinaryCanvasViewer: React.FC<PdfBinaryCanvasViewerProps> = ({
         }
 
         setPageCount(pdfDoc.numPages);
-        const outputScale = Math.min(window.devicePixelRatio || 1, 2);
+        const dpr = typeof window !== 'undefined' ? window.devicePixelRatio || 1 : 1;
+        // Supersample >= 2.5x even on 1x displays so small Persian & math glyphs stay razor-sharp
+        const supersample = Math.min(3.5, Math.max(2.5, dpr * 2));
         const availableWidth = Math.max(
           280,
           (scrollContainerRef.current?.clientWidth || paneWidth || 620) - 48
@@ -101,17 +103,28 @@ export const PdfBinaryCanvasViewer: React.FC<PdfBinaryCanvasViewerProps> = ({
 
           const unscaled = page.getViewport({ scale: 1 });
           const fitScale = Math.min(1.45, Math.max(0.5, availableWidth / unscaled.width));
-          const viewport = page.getViewport({ scale: fitScale * (zoom / 100) });
+          const displayScale = fitScale * (zoom / 100);
+          const cssViewport = page.getViewport({ scale: displayScale });
+          const renderViewport = page.getViewport({ scale: displayScale * supersample });
           const canvas = document.createElement('canvas');
-          const context = canvas.getContext('2d');
+          const context = canvas.getContext('2d', { alpha: false });
           if (!context) continue;
 
-          canvas.width = Math.floor(viewport.width * outputScale);
-          canvas.height = Math.floor(viewport.height * outputScale);
-          canvas.style.width = `${Math.floor(viewport.width)}px`;
-          canvas.style.height = `${Math.floor(viewport.height)}px`;
+          const cssWidth = Math.round(cssViewport.width);
+          const cssHeight = Math.round(cssViewport.height);
+          canvas.width = Math.max(1, Math.round(renderViewport.width));
+          canvas.height = Math.max(1, Math.round(renderViewport.height));
+          canvas.style.width = `${cssWidth}px`;
+          canvas.style.height = `${cssHeight}px`;
+          canvas.dataset.supersample = supersample.toFixed(2);
+          canvas.dataset.testid = 'pdf-page-canvas';
           canvas.className = 'mx-auto bg-white shadow-sm border border-neutral-200 block';
           canvas.setAttribute('aria-label', `PDF page ${pageNum}`);
+
+          context.imageSmoothingEnabled = true;
+          context.imageSmoothingQuality = 'high';
+          context.fillStyle = '#ffffff';
+          context.fillRect(0, 0, canvas.width, canvas.height);
 
           if (containerRef.current && !cancelled) {
             containerRef.current.appendChild(canvas);
@@ -120,8 +133,7 @@ export const PdfBinaryCanvasViewer: React.FC<PdfBinaryCanvasViewerProps> = ({
           await page.render({
             canvasContext: context,
             canvas,
-            viewport,
-            transform: outputScale !== 1 ? [outputScale, 0, 0, outputScale, 0, 0] : undefined,
+            viewport: renderViewport,
           }).promise;
         }
       } catch (err) {

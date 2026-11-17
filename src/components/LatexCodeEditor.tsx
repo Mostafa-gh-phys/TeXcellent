@@ -45,7 +45,10 @@ interface LatexCodeEditorProps {
   files: ProjectFile[];
   onCursorInfo?: (info: { line: number; col: number; detectedDir: 'ltr' | 'rtl' }) => void;
   onScriptDetected?: (script: 'ltr' | 'rtl') => void;
-  editorRefOut?: React.MutableRefObject<{ insertAtCursor: (snippet: string) => void } | null>;
+  editorRefOut?: React.MutableRefObject<{
+    insertAtCursor: (snippet: string) => void;
+    jumpToLine?: (lineNumber: number) => void;
+  } | null>;
 }
 
 function buildBidiDecorations(
@@ -404,6 +407,15 @@ export const LatexCodeEditor: React.FC<LatexCodeEditorProps> = ({
           view.dispatch({
             changes: { from: sel.from, to: sel.to, insert: snippet },
             selection: { anchor: sel.from + snippet.length },
+          });
+          view.focus();
+        },
+        jumpToLine: (lineNumber: number) => {
+          const clamped = Math.max(1, Math.min(view.state.doc.lines, lineNumber));
+          const line = view.state.doc.line(clamped);
+          view.dispatch({
+            selection: { anchor: line.from },
+            effects: EditorView.scrollIntoView(line.from, { y: 'center' }),
           });
           view.focus();
         },
