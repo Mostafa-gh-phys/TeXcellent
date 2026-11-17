@@ -11,13 +11,18 @@ import { GoogleGenAI, Type } from '@google/genai';
 import { PDFDocument, PDFFont, StandardFonts, rgb } from 'pdf-lib';
 import fontkit from '@pdf-lib/fontkit';
 import { parseLatexDocument, validateLatexBuild } from './src/utils/latexParser';
-import { latexMathToUnicode, shapePersianForPdf } from './src/utils/pdfTextShaper';
+import { latexMathToUnicode, shapePersianRunsForPdf } from './src/utils/pdfTextShaper';
 import {
   buildCompilerCliArgs,
   resolveBibliographyTool,
   resolvePassCount,
   sanitizeRelativeTeXPath,
 } from './src/utils/compilerArgs';
+import {
+  extractPrimaryTexError,
+  normalizeCustomTexPathEntries,
+  sanitizeTexChildEnv,
+} from './src/utils/texEnv';
 import type {
   BibliographyTool,
   CompilerInteractionMode,
@@ -98,8 +103,14 @@ function wrapText(text: string, maxChars: number): string[] {
 
 async function collectStandardTexSearchDirs(customDir?: string): Promise<string[]> {
   const dirs = new Set<string>();
-  if (customDir?.trim()) dirs.add(customDir.trim());
-  if (process.env.TEX_BIN_DIR?.trim()) dirs.add(process.env.TEX_BIN_DIR.trim());
+  for (const entry of normalizeCustomTexPathEntries(customDir)) {
+    dirs.add(entry);
+  }
+  if (process.env.TEX_BIN_DIR?.trim()) {
+    for (const entry of normalizeCustomTexPathEntries(process.env.TEX_BIN_DIR)) {
+      dirs.add(entry);
+    }
+  }
 
   const home = os.homedir();
   const isWin = process.platform === 'win32';
@@ -149,14 +160,11 @@ async function collectStandardTexSearchDirs(customDir?: string): Promise<string[
   return Array.from(dirs);
 }
 
-function buildTexChildEnv(extraDirs: Array<string | null | undefined>): NodeJS.ProcessEnv {
-  const valid = extraDirs.map((d) => d?.trim()).filter((d): d is string => Boolean(d));
-  const sep = path.delimiter;
-  const currentPath = process.env.PATH || '';
-  return {
-    ...process.env,
-    PATH: valid.length > 0 ? `${valid.join(sep)}${sep}${currentPath}` : currentPath,
-  };
+function buildTexChildEnv(
+  extraDirs: Array<string | null | undefined>,
+  texRootDir?: string | null
+): NodeJS.ProcessEnv {
+  return sanitizeTexChildEnv(process.env, extraDirs, texRootDir);
 }
 
 function classifyDistributionFromBanner(banner: string, binPath: string): TexDistribution | null {
@@ -226,7 +234,10 @@ async function detectLocalTexInstallation(customDir?: string): Promise<DetectedT
     }
     if (!foundPath) {
       try {
-        const { stdout } = await execFileAsync(lookupCmd, [cmd], { timeout: 1500 });
+        const { stdout } = await execFileAsync(lookupCmd, [cmd], {
+          timeout: 1500,
+          env: buildTexChildEnv(searchDirs),
+        });
         const firstMatch = stdout.split(/\r?\n/).find((l) => l.trim().length > 0)?.trim();
         if (firstMatch) foundPath = firstMatch;
       } catch {
@@ -342,28 +353,61 @@ async function buildPdfBinaryFromLatex(
     }
   };
 
-  const prepareLine = (raw: string, bold: boolean, rtlHint: boolean): { text: string; font: PDFFont; isRtl: boolean } => {
+  const prepareRuns = (
+    raw: string,
+    bold: boolean,
+    rtlHint: boolean,
+    mono: boolean
+  ): { runs: Array<{ text: string; font: PDFFont }>; isRtl: boolean } => {
     const clean = latexMathToUnicode(raw);
-    const hasRtl = RTL_CHAR_RE.test(clean);
-    if (hasUnicodeFont) {
-      if (hasRtl) {
-        return {
-          text: shapePersianForPdf(clean, rtlHint || hasRtl),
-          font: bold ? fontRtlBold : fontRtlRegular,
-          isRtl: rtlHint || hasRtl,
-        };
-      }
+    if (mono) {
       return {
-        text: clean,
-        font: bold ? fontBold : fontRegular,
+        runs: [{ text: hasUnicodeFont ? clean : toWinAnsiSafe(clean), font: fontMono }],
         isRtl: false,
       };
     }
+    const hasRtl = RTL_CHAR_RE.test(clean);
+    if (!hasUnicodeFont) {
+      return {
+        runs: [{ text: toWinAnsiSafe(clean), font: bold ? fontBold : fontRegular }],
+        isRtl: false,
+      };
+    }
+    if (hasRtl) {
+      const shapedRuns = shapePersianRunsForPdf(clean, rtlHint || hasRtl);
+      return {
+        runs: shapedRuns.map((r) => ({
+          text: r.text,
+          font: r.isRtl
+            ? bold
+              ? fontRtlBold
+              : fontRtlRegular
+            : bold
+              ? fontBold
+              : fontRegular,
+        })),
+        isRtl: rtlHint || hasRtl,
+      };
+    }
     return {
-      text: toWinAnsiSafe(clean),
-      font: bold ? fontBold : fontRegular,
+      runs: [{ text: clean, font: bold ? fontBold : fontRegular }],
       isRtl: false,
     };
+  };
+
+  const measurePreparedRuns = (
+    runs: Array<{ text: string; font: PDFFont }>,
+    size: number
+  ): number => {
+    let total = 0;
+    for (const run of runs) {
+      try {
+        total += run.font.widthOfTextAtSize(run.text, size);
+      } catch {
+        total += fontRegular.widthOfTextAtSize(toWinAnsiSafe(run.text), size);
+      }
+    }
+    return total;
   };
 
   const drawTextParagraph = (
@@ -381,26 +425,17 @@ async function buildPdfBinaryFromLatex(
   ) => {
     const size = opts.size ?? 10.5;
     const bold = opts.bold ?? false;
+    const mono = opts.mono ?? false;
     const indent = opts.indent ?? 0;
     const color = opts.color ?? rgb(0.12, 0.14, 0.17);
     const lineHeight = opts.lineHeight ?? Math.round(size * 1.48);
     const rtlHint = opts.rtl ?? RTL_CHAR_RE.test(raw);
     const clean = latexMathToUnicode(raw);
 
-    const activeFont: PDFFont = opts.mono
-      ? fontMono
-      : hasUnicodeFont && RTL_CHAR_RE.test(clean)
-        ? bold
-          ? fontRtlBold
-          : fontRtlRegular
-        : bold
-          ? fontBold
-          : fontRegular;
-
     const measureLogical = (sample: string) => {
       try {
-        const shaped = hasUnicodeFont ? (RTL_CHAR_RE.test(sample) ? shapePersianForPdf(sample, rtlHint) : sample) : toWinAnsiSafe(sample);
-        return activeFont.widthOfTextAtSize(shaped, size);
+        const prepared = prepareRuns(sample, bold, rtlHint, mono);
+        return measurePreparedRuns(prepared.runs, size);
       } catch {
         return sample.length * size * 0.52;
       }
@@ -409,32 +444,36 @@ async function buildPdfBinaryFromLatex(
     const lines = wrapTextByWidth(clean, Math.max(120, MAX_WIDTH - indent), size, measureLogical);
     for (const line of lines) {
       ensureSpace(lineHeight + 2);
-      const prepared = opts.mono
-        ? { text: hasUnicodeFont ? line : toWinAnsiSafe(line), font: fontMono, isRtl: false }
-        : prepareLine(line, bold, rtlHint);
-      let drawText = prepared.text;
-      let width = 0;
-      try {
-        width = prepared.font.widthOfTextAtSize(drawText, size);
-      } catch {
-        drawText = toWinAnsiSafe(line);
-        width = fontRegular.widthOfTextAtSize(drawText, size);
-      }
+      const prepared = prepareRuns(line, bold, rtlHint, mono);
+      const totalWidth = measurePreparedRuns(prepared.runs, size);
 
-      const x =
+      let cursorX =
         opts.align === 'center'
-          ? Math.max(MARGIN, (PAGE_W - width) / 2)
+          ? Math.max(MARGIN, (PAGE_W - totalWidth) / 2)
           : prepared.isRtl
-            ? Math.max(MARGIN, PAGE_W - MARGIN - indent - width)
+            ? Math.max(MARGIN, PAGE_W - MARGIN - indent - totalWidth)
             : MARGIN + indent;
 
-      page.drawText(drawText, {
-        x,
-        y,
-        size,
-        font: prepared.font,
-        color,
-      });
+      for (const run of prepared.runs) {
+        let drawText = run.text;
+        let drawFont = run.font;
+        let runWidth = 0;
+        try {
+          runWidth = drawFont.widthOfTextAtSize(drawText, size);
+        } catch {
+          drawText = toWinAnsiSafe(run.text);
+          drawFont = fontRegular;
+          runWidth = drawFont.widthOfTextAtSize(drawText, size);
+        }
+        page.drawText(drawText, {
+          x: cursorX,
+          y,
+          size,
+          font: drawFont,
+          color,
+        });
+        cursorX += runWidth;
+      }
       y -= lineHeight;
     }
   };
@@ -450,7 +489,7 @@ async function buildPdfBinaryFromLatex(
     });
     y -= 4;
     if (parsed.author) {
-      drawTextParagraph(parsed.author, {
+      drawTextParagraph(parsed.author.replace(/\\and\b/g, ' & '), {
         size: 11,
         align: 'center',
         rtl: RTL_CHAR_RE.test(parsed.author),
@@ -528,7 +567,7 @@ async function buildPdfBinaryFromLatex(
     }
     if ((block.type === 'itemize' || block.type === 'enumerate') && block.items) {
       block.items.forEach((segs, idx) => {
-        const bullet = block.type === 'enumerate' ? `${idx + 1}. ` : '• ';
+        const bullet = block.type === 'enumerate' ? `${idx + 1}. ` : '- ';
         const text = segs.map((s) => s.text).join('').replace(/\s+/g, ' ').trim();
         drawTextParagraph(`${bullet}${text}`, {
           size: 10,
@@ -755,7 +794,7 @@ async function startServer() {
         bibliographyTool = 'auto',
         outputFormat = 'pdf',
         fileLineError = true,
-        haltOnError = true,
+        haltOnError = false,
         extraArgs = '',
       } = req.body as {
         projectName?: string;
@@ -835,7 +874,7 @@ async function startServer() {
       if (nativeCmd) {
         const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'texcellent-'));
         try {
-          const env = buildTexChildEnv([path.dirname(nativeCmd), detectedTex.detectedBinDir]);
+          const env = buildTexChildEnv([path.dirname(nativeCmd), detectedTex.detectedBinDir], tmpDir);
 
           for (const f of files) {
             const relSafe = sanitizeRelativeTeXPath(f.name);
@@ -845,18 +884,28 @@ async function startServer() {
           }
 
           const safeMainRel = sanitizeRelativeTeXPath(mainFileName);
-          const args = buildCompilerCliArgs(mode, safeMainRel, {
-            compilerMode: mode,
-            interactionMode,
-            compilePasses,
-            bibliographyTool,
-            outputFormat,
-            fileLineError,
-            haltOnError,
-            shellEscape,
-            synctex,
-            extraArgs,
-          });
+          const mainRelDir = path.dirname(safeMainRel);
+          const compileCwd =
+            mainRelDir && mainRelDir !== '.' ? path.join(tmpDir, mainRelDir) : tmpDir;
+          const mainBaseName = path.basename(safeMainRel);
+
+          const args = buildCompilerCliArgs(
+            mode,
+            mainBaseName,
+            {
+              compilerMode: mode,
+              interactionMode,
+              compilePasses,
+              bibliographyTool,
+              outputFormat,
+              fileLineError,
+              haltOnError,
+              shellEscape,
+              synctex,
+              extraArgs,
+            },
+            mainFile.content
+          );
 
           const resolvedBib = resolveBibliographyTool(mainFile.content, files, bibliographyTool);
           const passCount = resolvePassCount(
@@ -865,12 +914,20 @@ async function startServer() {
             resolvedBib
           );
 
+          const outDirFlag = args.find((a) => a.startsWith('-output-directory='));
+          const customOutDir = outDirFlag
+            ? path.resolve(compileCwd, outDirFlag.slice('-output-directory='.length))
+            : null;
+          if (customOutDir) {
+            await fs.mkdir(customOutDir, { recursive: true });
+          }
+
           const logChunks: string[] = [];
           let compileOk = true;
           const runCmd = async (cmdPath: string, cmdArgs: string[], label: string) => {
             try {
               const out = await execFileAsync(cmdPath, cmdArgs, {
-                cwd: tmpDir,
+                cwd: compileCwd,
                 timeout: 60000,
                 maxBuffer: 10 * 1024 * 1024,
                 env,
@@ -887,12 +944,29 @@ async function startServer() {
             }
           };
 
+          const jobBase = mainBaseName.replace(/\.tex$/i, '');
+          const pdfName = `${jobBase}.pdf`;
+          const candidateSearchDirs = Array.from(
+            new Set([customOutDir, compileCwd, tmpDir].filter((d): d is string => Boolean(d)))
+          );
+          const hasProducedPdf = async () => {
+            for (const dir of candidateSearchDirs) {
+              try {
+                await fs.access(path.join(dir, pdfName));
+                return true;
+              } catch {
+                // try next
+              }
+            }
+            return false;
+          };
+
           // Pass 1
           compileOk = await runCmd(nativeCmd, args, `${mode} (pass 1)`);
+          let producedAfterPass1 = compileOk || (await hasProducedPdf());
 
-          // Bibliography step (BibTeX / Biber) if requested and pass 1 generated aux/bcf
-          const jobBase = path.basename(safeMainRel).replace(/\.tex$/i, '');
-          if (compileOk && resolvedBib !== 'none' && mode !== 'latexmk') {
+          // Bibliography step (BibTeX / Biber)
+          if (producedAfterPass1 && resolvedBib !== 'none' && mode !== 'latexmk') {
             const bibBin = detectedTex.binaries[resolvedBib]?.path;
             if (bibBin) {
               await runCmd(bibBin, [jobBase], resolvedBib);
@@ -900,13 +974,14 @@ async function startServer() {
           }
 
           // Additional passes for refs/TOC/citations
-          for (let p = 2; p <= passCount && compileOk; p++) {
-            compileOk = await runCmd(nativeCmd, args, `${mode} (pass ${p})`);
+          for (let p = 2; p <= passCount && (compileOk || producedAfterPass1); p++) {
+            const passOk = await runCmd(nativeCmd, args, `${mode} (pass ${p})`);
+            compileOk = compileOk && passOk;
           }
 
-          // Convert DVI/XDV -> PDF via dvipdfmx when latex (DVI) was chosen in PDF output mode
+          // Convert DVI -> PDF via dvipdfmx when latex (DVI) was chosen in PDF output mode
           if (compileOk && mode === 'latex' && outputFormat === 'pdf') {
-            const dviPath = path.join(tmpDir, `${jobBase}.dvi`);
+            const dviPath = path.join(customOutDir || compileCwd, `${jobBase}.dvi`);
             const dvipdfmx = detectedTex.binaries.dvipdfmx?.path;
             try {
               await fs.access(dviPath);
@@ -918,38 +993,64 @@ async function startServer() {
             }
           }
 
-          // Collect generated output files inside tmpDir
+          // Collect generated output files across output/compile directories
           const generatedFiles: Array<{ name: string; sizeBytes: number }> = [];
-          try {
-            const outEntries = await fs.readdir(tmpDir, { withFileTypes: true });
-            for (const entry of outEntries) {
-              if (entry.isFile() && /\.(pdf|dvi|xdv|synctex\.gz|aux|bbl|toc|log)$/i.test(entry.name)) {
-                const st = await fs.stat(path.join(tmpDir, entry.name));
-                generatedFiles.push({ name: entry.name, sizeBytes: st.size });
+          const seenNames = new Set<string>();
+          for (const dir of candidateSearchDirs) {
+            try {
+              const outEntries = await fs.readdir(dir, { withFileTypes: true });
+              for (const entry of outEntries) {
+                if (
+                  entry.isFile() &&
+                  /\.(pdf|dvi|xdv|synctex\.gz|aux|bbl|toc|log)$/i.test(entry.name) &&
+                  !seenNames.has(entry.name)
+                ) {
+                  seenNames.add(entry.name);
+                  const st = await fs.stat(path.join(dir, entry.name));
+                  generatedFiles.push({ name: entry.name, sizeBytes: st.size });
+                }
               }
+            } catch {
+              // ignore readdir failure
             }
-          } catch {
-            // ignore readdir failure
           }
 
-          const pdfName = `${jobBase}.pdf`;
-          const candidatePdfPaths = [
-            path.join(tmpDir, pdfName),
-            path.join(tmpDir, path.dirname(safeMainRel), pdfName),
-          ];
           const distTitle = `${detectedTex.detectedFamily || 'Local TeX'} (${path.basename(nativeCmd)})`;
 
           let pdfBytes: Buffer | null = null;
-          for (const candidate of candidatePdfPaths) {
+          for (const dir of candidateSearchDirs) {
             try {
-              pdfBytes = await fs.readFile(candidate);
+              pdfBytes = await fs.readFile(path.join(dir, pdfName));
               break;
             } catch {
               // check next candidate
             }
           }
 
+          // Read .log if stdout missed error details
+          let dotLog = '';
+          for (const dir of candidateSearchDirs) {
+            try {
+              dotLog = await fs.readFile(path.join(dir, `${jobBase}.log`), 'utf8');
+              if (dotLog) break;
+            } catch {
+              // try next
+            }
+          }
+          if (dotLog && !logChunks.join('').includes(dotLog.slice(0, 80))) {
+            logChunks.push(`--- ${jobBase}.log (tail) ---\n${dotLog.slice(-4000)}`);
+          }
+          const combinedLog = logChunks.join('\n\n').trim();
+
           if (pdfBytes) {
+            let actualPageCount = 1;
+            try {
+              const loadedPdf = await PDFDocument.load(pdfBytes, { ignoreEncryption: true });
+              actualPageCount = Math.max(1, loadedPdf.getPageCount());
+            } catch {
+              actualPageCount = 1;
+            }
+
             const compileId = crypto.randomUUID();
             compiledPdfs.set(compileId, {
               buffer: pdfBytes,
@@ -961,17 +1062,17 @@ async function startServer() {
               compileId,
               pdfUrl: `/api/pdf/${compileId}`,
               durationMs: Date.now() - started,
-              pageCount: 1,
+              pageCount: actualPageCount,
               engineLabel: mode.toUpperCase(),
               distributionLabel: distTitle,
               backendType: 'native-binary',
-              rawLog: logChunks.join('\n\n').trim(),
+              rawLog: combinedLog,
               diagnostics: [
                 {
                   level: compileOk ? 'info' : 'error',
                   message: compileOk
                     ? `Compiled cleanly via ${nativeCmd} (${generatedFiles.length} output files)`
-                    : `Native compilation finished with warnings/errors.`,
+                    : extractPrimaryTexError(combinedLog, mode, outputFormat),
                 },
               ],
               generatedFiles,
@@ -979,36 +1080,7 @@ async function startServer() {
             });
           }
 
-          // Read .log if stdout missed error details
-          let dotLog = '';
-          for (const logCandidate of [
-            path.join(tmpDir, `${jobBase}.log`),
-            path.join(tmpDir, path.dirname(safeMainRel), `${jobBase}.log`),
-          ]) {
-            try {
-              dotLog = await fs.readFile(logCandidate, 'utf8');
-              if (dotLog) break;
-            } catch {
-              // try next
-            }
-          }
-          if (dotLog && !logChunks.join('').includes(dotLog.slice(0, 80))) {
-            logChunks.push(`--- ${jobBase}.log (tail) ---\n${dotLog.slice(-4000)}`);
-          }
-
-          const combinedLog = logChunks.join('\n\n').trim();
-          const bangLineMatch = combinedLog.match(/^!\s*(.+)$/m);
-          const xepersianMismatch =
-            /xepersian/i.test(combinedLog) &&
-            /xetex|xelatex|fatal/i.test(combinedLog) &&
-            mode !== 'xelatex';
-          const primaryErrorMsg = xepersianMismatch
-            ? `Package xepersian requires XeLaTeX (current mode: ${mode.toUpperCase()}). Switch compiler to XeLaTeX.`
-            : bangLineMatch
-              ? bangLineMatch[1].trim()
-              : outputFormat !== 'pdf'
-                ? `Compiled in ${outputFormat.toUpperCase()} mode without PDF output.`
-                : 'Native compiler halted before producing a PDF file.';
+          const primaryErrorMsg = extractPrimaryTexError(combinedLog, mode, outputFormat);
 
           return res.json({
             success: false,

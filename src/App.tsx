@@ -29,7 +29,11 @@ import {
   migrateLegacyDefaultProject,
   ProjectTemplate,
 } from './utils/defaultProjects';
-import { DEFAULT_COMPILER_SETTINGS, mergeCompilerSettings } from './utils/compilerArgs';
+import {
+  DEFAULT_COMPILER_SETTINGS,
+  inferPreferredCompilerMode,
+  mergeCompilerSettings,
+} from './utils/compilerArgs';
 import {
   inferFileLanguage,
   normalizeProjectFilePath,
@@ -57,6 +61,7 @@ const STORAGE_FONT_KEY = 'texcellent_font_v1';
 const STORAGE_FONT_SIZE_KEY = 'texcellent_font_size_v1';
 const STORAGE_BIDI_KEY = 'texcellent_bidi_v1';
 const STORAGE_COMPILER_KEY = 'texcellent_compiler_v1';
+const STORAGE_COMPILER_MIGRATED_HALT_KEY = 'texcellent_compiler_halt_default_v2';
 const STORAGE_SYNC_KEY = 'texcellent_sync_v1';
 
 const LEGACY_KEYS: Record<string, string> = {
@@ -128,9 +133,20 @@ export default function App() {
   const [editorFontSize, setEditorFontSize] = useState<number>(
     () => loadJson<number>(STORAGE_FONT_SIZE_KEY, 14)
   );
-  const [compilerSettings, setCompilerSettings] = useState<CompilerSettings>(() =>
-    mergeCompilerSettings(loadJson<Partial<CompilerSettings>>(STORAGE_COMPILER_KEY, DEFAULT_COMPILER_SETTINGS))
-  );
+  const [compilerSettings, setCompilerSettings] = useState<CompilerSettings>(() => {
+    const merged = mergeCompilerSettings(
+      loadJson<Partial<CompilerSettings>>(STORAGE_COMPILER_KEY, DEFAULT_COMPILER_SETTINGS)
+    );
+    try {
+      if (!localStorage.getItem(STORAGE_COMPILER_MIGRATED_HALT_KEY)) {
+        localStorage.setItem(STORAGE_COMPILER_MIGRATED_HALT_KEY, '1');
+        return { ...merged, haltOnError: false };
+      }
+    } catch {
+      // ignore storage failure
+    }
+    return merged;
+  });
   const [detectedTex, setDetectedTex] = useState<DetectedTexInstallation | null>(null);
   const [syncConfig, setSyncConfig] = useState<SyncConfig>(
     () => loadJson<SyncConfig>(STORAGE_SYNC_KEY, DEFAULT_SYNC_CONFIG)
@@ -154,6 +170,7 @@ export default function App() {
 
   const [compileResult, setCompileResult] = useState<CompileResult | null>(null);
   const [isCompiling, setIsCompiling] = useState<boolean>(false);
+  const [compileRequestTick, setCompileRequestTick] = useState<number>(0);
 
   const [activeModal, setActiveModal] = useState<
     null | 'file' | 'smart' | 'sync' | 'compiler' | 'settings' | 'external-fallback'
@@ -163,6 +180,7 @@ export default function App() {
   const splitContainerRef = useRef<HTMLDivElement | null>(null);
   const isResizingRef = useRef(false);
   const sidebarFolderInputRef = useRef<HTMLInputElement | null>(null);
+  const lastTargetFileIdRef = useRef<string | undefined>(undefined);
 
   const theme = EDITOR_THEMES[themeId] || EDITOR_THEMES['github-light'];
   const editorFont = EDITOR_FONTS[editorFontId] || EDITOR_FONTS.jetbrains;
@@ -352,11 +370,39 @@ export default function App() {
   // Initial compile + local TeX Live / MiKTeX autodetection on mount
   useEffect(() => {
     if (!isExternalPreviewWindow) {
+      lastTargetFileIdRef.current = compileTargetFile?.id;
       detectLocalCompilers(compilerSettings.customBinaryPath);
       handleCompile();
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // Post-state-commit compilation trigger (eliminates stale closures after project/file/folder switches)
+  useEffect(() => {
+    if (compileRequestTick > 0 && !isExternalPreviewWindow) {
+      lastTargetFileIdRef.current = compileTargetFile?.id;
+      handleCompile();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [compileRequestTick]);
+
+  // Auto-recompile when switching to a different standalone .tex document
+  useEffect(() => {
+    if (isExternalPreviewWindow) return;
+    const nextId = compileTargetFile?.id;
+    if (nextId && lastTargetFileIdRef.current && nextId !== lastTargetFileIdRef.current) {
+      lastTargetFileIdRef.current = nextId;
+      const inferred = inferPreferredCompilerMode(
+        compileTargetFile.content,
+        compilerSettings.compilerMode
+      );
+      if (inferred !== compilerSettings.compilerMode) {
+        setCompilerSettings((prev) => ({ ...prev, compilerMode: inferred }));
+      }
+      setCompileRequestTick((t) => t + 1);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [compileTargetFile?.id]);
 
   // Split pane drag handlers
   useEffect(() => {
@@ -442,9 +488,7 @@ export default function App() {
       ...prev,
       compilerMode: tpl.project.compilerMode,
     }));
-    setTimeout(() => {
-      handleCompile();
-    }, 60);
+    setCompileRequestTick((t) => t + 1);
   };
 
   const handleImportFiles = (incoming: ProjectFile[]) => {
@@ -452,8 +496,17 @@ export default function App() {
     let firstSelectedId = incoming[0].id;
     const openIds: string[] = [];
 
+    const mainCandidate =
+      incoming.find((f) => /(^|\/)main\.tex$/i.test(f.name)) ||
+      incoming.find(
+        (f) =>
+          f.language === 'latex' &&
+          /\\documentclass(?:\[[^\]]*\])?\s*\{/i.test(f.content)
+      );
+
     setProject((prev) => {
       const merged = [...prev.files];
+      let nextMainId = prev.mainFileId;
       for (const file of incoming) {
         const cleanName = normalizeProjectFilePath(file.name);
         const idx = merged.findIndex((f) => f.name === cleanName);
@@ -461,17 +514,24 @@ export default function App() {
           merged[idx] = { ...merged[idx], content: file.content, updatedAt: file.updatedAt };
           openIds.push(merged[idx].id);
           if (file.id === incoming[0].id) firstSelectedId = merged[idx].id;
+          if (mainCandidate && file.id === mainCandidate.id) nextMainId = merged[idx].id;
         } else {
           const added = { ...file, name: cleanName };
           merged.push(added);
           openIds.push(added.id);
+          if (mainCandidate && file.id === mainCandidate.id) nextMainId = added.id;
         }
       }
-      return { ...prev, files: merged, updatedAt: new Date().toISOString() };
+      return {
+        ...prev,
+        mainFileId: nextMainId,
+        files: merged,
+        updatedAt: new Date().toISOString(),
+      };
     });
 
-    const mainCandidate = incoming.find((f) => /(^|\/)main\.tex$/i.test(f.name));
-    setActiveFileId(mainCandidate ? mainCandidate.id : firstSelectedId);
+    const targetId = mainCandidate ? mainCandidate.id : firstSelectedId;
+    setActiveFileId(targetId);
     setOpenTabIds((prev) => {
       const next = [...prev];
       for (const id of openIds.slice(0, 8)) {
@@ -479,13 +539,22 @@ export default function App() {
       }
       return next;
     });
+
+    const targetFile = mainCandidate || incoming[0];
+    if (targetFile) {
+      setCompilerSettings((prev) => ({
+        ...prev,
+        compilerMode: inferPreferredCompilerMode(targetFile.content, prev.compilerMode),
+      }));
+    }
+    setCompileRequestTick((t) => t + 1);
   };
 
   const handleOpenFolderSelection = async (fileList: FileList | null) => {
     if (!fileList || fileList.length === 0) return;
     const rawFiles = Array.from(fileList).filter((f) => {
       const rel = (f as File & { webkitRelativePath?: string }).webkitRelativePath || f.name;
-      return /\.(tex|bib|sty|cls|md)$/i.test(rel);
+      return /\.(tex|bib|sty|cls|bst|clo|def|cfg|ltx|md)$/i.test(rel);
     });
     if (rawFiles.length === 0) return;
 
@@ -527,22 +596,33 @@ export default function App() {
     if (nextFiles.length === 0) return;
     const primaryFile =
       nextFiles.find((f) => f.name.toLowerCase() === 'main.tex') ||
+      nextFiles.find(
+        (f) =>
+          f.name.toLowerCase().endsWith('.tex') &&
+          /\\documentclass(?:\[[^\]]*\])?\s*\{/i.test(f.content)
+      ) ||
       nextFiles.find((f) => f.name.toLowerCase().endsWith('.tex')) ||
       nextFiles[0];
+
+    const preferredMode = inferPreferredCompilerMode(
+      primaryFile.content,
+      compilerSettings.compilerMode
+    );
 
     setProject({
       id: `proj-folder-${Date.now()}`,
       name: folderTitle || 'Opened Folder',
       mainFileId: primaryFile.id,
-      compilerMode: compilerSettings.compilerMode,
+      compilerMode: preferredMode,
       files: nextFiles,
       updatedAt: new Date().toISOString(),
     });
     setActiveFileId(primaryFile.id);
     setOpenTabIds([primaryFile.id]);
-    setTimeout(() => {
-      handleCompile();
-    }, 80);
+    if (preferredMode !== compilerSettings.compilerMode) {
+      setCompilerSettings((prev) => ({ ...prev, compilerMode: preferredMode }));
+    }
+    setCompileRequestTick((t) => t + 1);
   };
 
   const handleNewBlankProject = (projectName: string) => {
@@ -580,9 +660,7 @@ Write your document here.
     setProject(nextProject);
     setActiveFileId(mainId);
     setOpenTabIds([mainId]);
-    setTimeout(() => {
-      handleCompile();
-    }, 60);
+    setCompileRequestTick((t) => t + 1);
   };
 
   const handleOpenExternalPreview = () => {
@@ -597,7 +675,6 @@ Write your document here.
     return (
       <div className="h-screen w-screen overflow-hidden" style={{ backgroundColor: theme.ui.bg }}>
         <PdfPreviewPane
-          source={compileTargetFile?.content || ''}
           compileResult={compileResult}
           isCompiling={isCompiling}
           theme={theme}
@@ -1117,7 +1194,6 @@ Write your document here.
               } flex-col`}
             >
               <PdfPreviewPane
-                source={compileTargetFile?.content || ''}
                 compileResult={compileResult}
                 isCompiling={isCompiling}
                 theme={theme}
@@ -1227,7 +1303,6 @@ Write your document here.
             </div>
             <div className="flex-1 min-h-0">
               <PdfPreviewPane
-                source={compileTargetFile?.content || ''}
                 compileResult={compileResult}
                 isCompiling={isCompiling}
                 theme={theme}

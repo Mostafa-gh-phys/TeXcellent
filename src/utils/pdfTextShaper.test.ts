@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { latexMathToUnicode, shapePersianForPdf } from './pdfTextShaper';
+import { latexMathToUnicode, shapePersianForPdf, shapePersianRunsForPdf } from './pdfTextShaper';
 
 test('shapePersianForPdf shapes Persian words into Presentation Forms-B without losing characters', () => {
   const shaped = shapePersianForPdf('درس اول');
@@ -12,6 +12,10 @@ test('shapePersianForPdf shapes Persian words into Presentation Forms-B without 
 test('shapePersianForPdf preserves LTR words inside RTL sentences', () => {
   const mixed = shapePersianForPdf('نامساوی Cauchy-Schwarz برقرار است', true);
   assert.equal(mixed.includes('Cauchy-Schwarz'), true);
+
+  const runs = shapePersianRunsForPdf('نامساوی Cauchy-Schwarz برقرار است', true);
+  assert.equal(runs.some((r) => !r.isRtl && r.text.includes('Cauchy-Schwarz')), true);
+  assert.equal(runs.some((r) => r.isRtl), true);
 });
 
 test('latexMathToUnicode converts LaTeX math operators to readable Unicode glyphs', () => {

@@ -121,23 +121,33 @@ function shapeArabicWord(word: string): string {
   return shaped.reverse().join('');
 }
 
-/**
- * Visually orders a mixed RTL/LTR string left-to-right for `pdf-lib` drawing.
- * Pure RTL spans are shaped + reversed; inline LTR spans (English, formulas, numbers)
- * stay left-to-right while positioned in proper RTL sentence order when `baseRtl` is true.
- */
-export function shapePersianForPdf(text: string, baseRtl = RTL_CHAR_REGEX.test(text)): string {
-  if (!text) return '';
-  if (!RTL_CHAR_REGEX.test(text)) return text;
+export interface PdfTextRun {
+  text: string;
+  isRtl: boolean;
+}
 
-  // Tokenize into RTL runs (including RTL punctuation/spaces) and LTR runs (Latin/numbers/math)
+/**
+ * Splits and visually orders a mixed RTL/LTR string left-to-right into typed runs
+ * so the PDF renderer can pick an Arabic font for RTL runs and a Latin/Math font for LTR runs.
+ */
+export function shapePersianRunsForPdf(
+  text: string,
+  baseRtl = RTL_CHAR_REGEX.test(text)
+): PdfTextRun[] {
+  if (!text) return [];
+  if (!RTL_CHAR_REGEX.test(text)) return [{ text, isRtl: false }];
+
+  // Tokenize into RTL runs (Persian/Arabic + adjacent RTL spaces) and LTR runs (Latin/numbers/math)
   const segments: Array<{ isRtl: boolean; value: string }> = [];
   let current = '';
   let currentRtl: boolean | null = null;
 
   for (const ch of Array.from(text)) {
     const chIsRtl = RTL_CHAR_REGEX.test(ch) || ch === '\u200C';
-    const chIsLtr = /[A-Za-z0-9\\${}[\]()+\-=<>*/^_|]/.test(ch);
+    const chIsLtr =
+      /[A-Za-z0-9\u0370-\u03FF\u2016\u2022\u2100-\u214F\u2190-\u22FF\u27E8-\u27E9\\${}[\]()+\-=<>*/^_|]/.test(
+        ch
+      );
 
     if (ch === ' ') {
       if (currentRtl === null) {
@@ -161,18 +171,29 @@ export function shapePersianForPdf(text: string, baseRtl = RTL_CHAR_REGEX.test(t
     segments.push({ isRtl: currentRtl ?? baseRtl, value: current });
   }
 
-  const renderedSegments = segments.map((seg) => {
-    if (!seg.isRtl) return seg.value;
+  const renderedRuns: PdfTextRun[] = segments.map((seg) => {
+    if (!seg.isRtl) return { text: seg.value, isRtl: false };
     // Shape each Persian/Arabic word individually then reverse token order inside the RTL segment
     const parts = seg.value.split(/( +)/);
     const shapedParts = parts.map((p) => (RTL_CHAR_REGEX.test(p) ? shapeArabicWord(p) : p));
-    return shapedParts.reverse().join('');
+    return { text: shapedParts.reverse().join(''), isRtl: true };
   });
 
   if (baseRtl) {
-    return renderedSegments.reverse().join('');
+    return renderedRuns.reverse();
   }
-  return renderedSegments.join('');
+  return renderedRuns;
+}
+
+/**
+ * Visually orders a mixed RTL/LTR string left-to-right for `pdf-lib` drawing.
+ * Pure RTL spans are shaped + reversed; inline LTR spans (English, formulas, numbers)
+ * stay left-to-right while positioned in proper RTL sentence order when `baseRtl` is true.
+ */
+export function shapePersianForPdf(text: string, baseRtl = RTL_CHAR_REGEX.test(text)): string {
+  return shapePersianRunsForPdf(text, baseRtl)
+    .map((r) => r.text)
+    .join('');
 }
 
 const LATEX_MATH_GLYPHS: Array<[RegExp, string]> = [

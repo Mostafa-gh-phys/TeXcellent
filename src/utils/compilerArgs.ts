@@ -16,7 +16,7 @@ export const DEFAULT_COMPILER_SETTINGS: CompilerSettings = {
   bibliographyTool: 'auto',
   outputFormat: 'pdf',
   fileLineError: true,
-  haltOnError: true,
+  haltOnError: false,
   extraArgs: '',
   distribution: 'texlive-2025',
   edition: 'full',
@@ -55,21 +55,35 @@ export function parseExtraCliArgs(rawExtraArgs?: string): string[] {
 export function buildCompilerCliArgs(
   mode: CompilerMode,
   mainFileName: string,
-  settings: Partial<CompilerSettings> = {}
+  settings: Partial<CompilerSettings> = {},
+  sourceHint = ''
 ): string[] {
   const cfg = mergeCompilerSettings(settings);
   const safeMain = sanitizeRelativeTeXPath(mainFileName);
+  const extraFlags = parseExtraCliArgs(cfg.extraArgs);
 
   if (mode === 'latexmk') {
-    const args = ['-pdf', `-interaction=${cfg.interactionMode}`];
-    if (cfg.compilerMode === 'xelatex' || cfg.extraArgs.includes('xelatex')) {
-      // keep explicit latexmk defaults clean unless extraArgs specifies engine
-    }
+    const hasEngineFlag = extraFlags.some((flag) =>
+      /^-(pdf|xelatex|lualatex|dvi|ps|pdflatex)$/.test(flag)
+    );
+    const engineFlag = hasEngineFlag
+      ? null
+      : /\\usepackage(?:\[[^\]]*\])?\{[^}]*\b(?:xepersian|fontspec|polyglossia)\b[^}]*\}/i.test(
+            sourceHint
+          )
+        ? '-xelatex'
+        : /\\usepackage(?:\[[^\]]*\])?\{[^}]*\b(?:luacode|luatexja)\b[^}]*\}/i.test(sourceHint)
+          ? '-lualatex'
+          : '-pdf';
+
+    const args = engineFlag
+      ? [engineFlag, `-interaction=${cfg.interactionMode}`]
+      : [`-interaction=${cfg.interactionMode}`];
     if (cfg.fileLineError) args.push('-file-line-error');
     if (cfg.haltOnError) args.push('-halt-on-error');
     if (cfg.synctex) args.push('-synctex=1');
     if (cfg.shellEscape) args.push('-shell-escape');
-    args.push(...parseExtraCliArgs(cfg.extraArgs));
+    args.push(...extraFlags);
     args.push(safeMain);
     return args;
   }
@@ -94,7 +108,7 @@ export function buildCompilerCliArgs(
     }
   }
 
-  args.push(...parseExtraCliArgs(cfg.extraArgs));
+  args.push(...extraFlags);
   args.push(safeMain);
   return args;
 }
@@ -134,4 +148,28 @@ export function resolvePassCount(
     return 2;
   }
   return 1;
+}
+
+function stripLatexComments(source: string): string {
+  return source
+    .split(/\r?\n/)
+    .map((line) => line.replace(/(^|[^\\])%.*$/, '$1'))
+    .join('\n');
+}
+
+export function inferPreferredCompilerMode(
+  source: string,
+  currentMode: CompilerMode = 'xelatex'
+): CompilerMode {
+  const stripped = stripLatexComments(source || '');
+  if (/\\usepackage(?:\[[^\]]*\])?\{[^}]*\bxepersian\b[^}]*\}/i.test(stripped)) {
+    return 'xelatex';
+  }
+  if (
+    (currentMode === 'pdflatex' || currentMode === 'latex') &&
+    /\\usepackage(?:\[[^\]]*\])?\{[^}]*\b(?:fontspec|polyglossia)\b[^}]*\}/i.test(stripped)
+  ) {
+    return 'xelatex';
+  }
+  return currentMode;
 }

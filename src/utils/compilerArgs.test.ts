@@ -39,6 +39,15 @@ test('buildCompilerCliArgs builds safe CLI flags for xelatex, pdflatex DVI, and 
     'chapters/main.tex',
   ]);
 
+  const latexmkPersian = buildCompilerCliArgs(
+    'latexmk',
+    'main.tex',
+    {},
+    '\\documentclass{article}\n\\usepackage{xepersian}'
+  );
+  assert.equal(latexmkPersian[0], '-xelatex');
+  assert.equal(latexmkPersian.includes('-halt-on-error'), false);
+
   const pdfDvi = buildCompilerCliArgs('pdflatex', 'paper.tex', { outputFormat: 'dvi' });
   assert.equal(pdfDvi.includes('-output-format=dvi'), true);
 

@@ -91,7 +91,7 @@ export const FileModal: React.FC<FileModalProps> = ({
         for (const [entryName, entry] of Object.entries(zip.files)) {
           if (entry.dir) continue;
           const normalizedEntry = entryName.replace(/^\/+/, '');
-          if (/\.(tex|bib|sty|cls)$/i.test(normalizedEntry)) {
+          if (/\.(tex|bib|sty|cls|bst|clo|def|cfg|ltx)$/i.test(normalizedEntry)) {
             const content = await entry.async('string');
             imported.push({
               id: `open-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
@@ -99,7 +99,7 @@ export const FileModal: React.FC<FileModalProps> = ({
               content,
               language: normalizedEntry.endsWith('.bib')
                 ? 'bibtex'
-                : normalizedEntry.endsWith('.sty') || normalizedEntry.endsWith('.cls')
+                : /\.(sty|cls|bst|clo|def|cfg)$/i.test(normalizedEntry)
                   ? 'style'
                   : 'latex',
               updatedAt: new Date().toISOString(),
@@ -132,7 +132,7 @@ export const FileModal: React.FC<FileModalProps> = ({
           language: 'latex',
           updatedAt: new Date().toISOString(),
         });
-      } else if (/\.(tex|bib|sty|cls)$/i.test(relName)) {
+      } else if (/\.(tex|bib|sty|cls|bst|clo|def|cfg|ltx)$/i.test(relName)) {
         const text = await file.text();
         imported.push({
           id: `open-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
@@ -140,7 +140,7 @@ export const FileModal: React.FC<FileModalProps> = ({
           content: text,
           language: relName.endsWith('.bib')
             ? 'bibtex'
-            : relName.endsWith('.sty') || relName.endsWith('.cls')
+            : /\.(sty|cls|bst|clo|def|cfg)$/i.test(relName)
               ? 'style'
               : 'latex',
           updatedAt: new Date().toISOString(),
@@ -340,7 +340,7 @@ export const FileModal: React.FC<FileModalProps> = ({
               ref={openInputRef}
               type="file"
               multiple
-              accept=".tex,.bib,.sty,.cls,.md,.zip"
+              accept=".tex,.bib,.sty,.cls,.bst,.clo,.def,.cfg,.ltx,.md,.zip"
               className="hidden"
               onChange={(e) => handleOpenFiles(e.target.files)}
             />
