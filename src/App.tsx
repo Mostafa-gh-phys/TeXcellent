@@ -19,9 +19,13 @@ import {
   LatexProject,
   PreviewMode,
   ProjectFile,
+  ShortcutActionId,
+  ShortcutMap,
   SyncConfig,
   ThemeId,
 } from './types/latex';
+import { mergeShortcuts } from './utils/shortcuts';
+import { matchesShortcutEvent } from './utils/shortcuts';
 import { EDITOR_THEMES } from './utils/themes';
 import { EDITOR_FONTS } from './utils/editorFonts';
 import {
@@ -69,6 +73,7 @@ const STORAGE_BIDI_KEY = 'texcellent_bidi_v1';
 const STORAGE_COMPILER_KEY = 'texcellent_compiler_v1';
 const STORAGE_COMPILER_MIGRATED_HALT_KEY = 'texcellent_compiler_halt_default_v2';
 const STORAGE_SYNC_KEY = 'texcellent_sync_v1';
+const STORAGE_SHORTCUTS_KEY = 'texcellent_shortcuts_v1';
 
 const LEGACY_KEYS: Record<string, string> = {
   [STORAGE_PROJECT_KEY]: 'texmatch_project_v1',
@@ -197,6 +202,9 @@ export default function App() {
   const [directionMode, setDirectionMode] = useState<DirectionMode>(
     () => loadJson<DirectionMode>(STORAGE_BIDI_KEY, 'auto')
   );
+  const [shortcuts, setShortcuts] = useState<ShortcutMap>(() =>
+    mergeShortcuts(loadJson<Partial<Record<string, unknown>> | null>(STORAGE_SHORTCUTS_KEY, null))
+  );
   const [previewMode, setPreviewMode] = useState<PreviewMode>('beside');
   const [mobilePane, setMobilePane] = useState<'editor' | 'preview'>('editor');
   const [showSidebar, setShowSidebar] = useState<boolean>(true);
@@ -324,6 +332,14 @@ export default function App() {
       // ignore
     }
   }, [directionMode]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(STORAGE_SHORTCUTS_KEY, JSON.stringify(shortcuts));
+    } catch {
+      // ignore
+    }
+  }, [shortcuts]);
 
   // Sync external preview window via BroadcastChannel
   useEffect(() => {
@@ -485,6 +501,70 @@ export default function App() {
       window.removeEventListener('mouseup', onUp);
     };
   }, []);
+
+  const triggerWorkspaceShortcut = useCallback(
+    (
+      action: Extract<
+        ShortcutActionId,
+        'compile' | 'togglePreview' | 'toggleSidebar' | 'toggleLog' | 'openFiles' | 'openSettings'
+      >
+    ) => {
+      switch (action) {
+        case 'compile':
+          handleCompile();
+          break;
+        case 'togglePreview':
+          setPreviewMode((prev) => (prev === 'beside' ? 'editor-only' : 'beside'));
+          break;
+        case 'toggleSidebar':
+          setShowSidebar((v) => !v);
+          break;
+        case 'toggleLog':
+          setShowLog((v) => !v);
+          break;
+        case 'openFiles':
+          setActiveModal((prev) => (prev === 'file' ? null : 'file'));
+          break;
+        case 'openSettings':
+          setActiveModal((prev) => (prev === 'settings' ? null : 'settings'));
+          break;
+      }
+    },
+    [handleCompile]
+  );
+
+  // Global keyboard shortcut listener (skips while recording new shortcuts in Settings)
+  useEffect(() => {
+    if (isExternalPreviewWindow) return;
+    const isMac =
+      typeof navigator !== 'undefined' && /Mac|iPhone|iPad|iPod/i.test(navigator.platform || '');
+
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (document.querySelector('[data-shortcut-recording="true"]')) return;
+
+      const target = e.target as HTMLElement | null;
+      const inCodeMirror = Boolean(target?.closest('.cm-editor'));
+      if (inCodeMirror) return;
+
+      const actions: Array<
+        Extract<
+          ShortcutActionId,
+          'compile' | 'togglePreview' | 'toggleSidebar' | 'toggleLog' | 'openFiles' | 'openSettings'
+        >
+      > = ['compile', 'togglePreview', 'toggleSidebar', 'toggleLog', 'openFiles', 'openSettings'];
+
+      for (const actionId of actions) {
+        if (matchesShortcutEvent(e, shortcuts[actionId], isMac)) {
+          e.preventDefault();
+          triggerWorkspaceShortcut(actionId);
+          return;
+        }
+      }
+    };
+
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [isExternalPreviewWindow, shortcuts, triggerWorkspaceShortcut]);
 
   const handleFileContentChange = (nextContent: string) => {
     if (!activeFile) return;
@@ -1390,6 +1470,8 @@ Write your document here.
                     editorFontSize={editorFontSize}
                     directionMode={directionMode}
                     files={project.files}
+                    shortcuts={shortcuts}
+                    onTriggerWorkspaceShortcut={triggerWorkspaceShortcut}
                     onCursorInfo={setCursorInfo}
                     onScriptDetected={setKeyboardScript}
                     editorRefOut={editorActionsRef}
@@ -1587,6 +1669,8 @@ Write your document here.
         directionMode={directionMode}
         onChangeDirectionMode={setDirectionMode}
         keyboardScript={keyboardScript}
+        shortcuts={shortcuts}
+        onChangeShortcuts={setShortcuts}
       />
 
       {/* External Preview Fallback Modal (if browser blocks popup inside iframe) */}

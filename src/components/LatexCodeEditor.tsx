@@ -9,6 +9,7 @@ import {
   Decoration,
   DecorationSet,
   Direction,
+  KeyBinding,
   ViewPlugin,
   ViewUpdate,
   keymap,
@@ -24,9 +25,10 @@ import {
   startCompletion,
 } from '@codemirror/autocomplete';
 import { searchKeymap, highlightSelectionMatches } from '@codemirror/search';
-import { DirectionMode, ProjectFile } from '../types/latex';
+import { DirectionMode, ProjectFile, ShortcutActionId, ShortcutMap } from '../types/latex';
 import { EditorTheme } from '../utils/themes';
 import { EditorFontOption } from '../utils/editorFonts';
+import { DEFAULT_SHORTCUTS } from '../utils/shortcuts';
 import {
   computeBidiSpans,
   detectInputScript,
@@ -34,6 +36,11 @@ import {
   tokenizeLatexLine,
 } from '../utils/bidiLatex';
 import { getLatexSuggestions } from '../utils/latexAutocomplete';
+
+type WorkspaceShortcutAction = Extract<
+  ShortcutActionId,
+  'compile' | 'togglePreview' | 'toggleSidebar' | 'toggleLog' | 'openFiles' | 'openSettings'
+>;
 
 interface LatexCodeEditorProps {
   value: string;
@@ -43,6 +50,8 @@ interface LatexCodeEditorProps {
   editorFontSize: number;
   directionMode: DirectionMode;
   files: ProjectFile[];
+  shortcuts?: ShortcutMap;
+  onTriggerWorkspaceShortcut?: (action: WorkspaceShortcutAction) => void;
   onCursorInfo?: (info: { line: number; col: number; detectedDir: 'ltr' | 'rtl' }) => void;
   onScriptDetected?: (script: 'ltr' | 'rtl') => void;
   editorRefOut?: React.MutableRefObject<{
@@ -240,6 +249,8 @@ export const LatexCodeEditor: React.FC<LatexCodeEditorProps> = ({
   editorFontSize,
   directionMode,
   files,
+  shortcuts = DEFAULT_SHORTCUTS,
+  onTriggerWorkspaceShortcut,
   onCursorInfo,
   onScriptDetected,
   editorRefOut,
@@ -249,6 +260,7 @@ export const LatexCodeEditor: React.FC<LatexCodeEditorProps> = ({
 
   const themeCompRef = useRef(new Compartment());
   const pluginCompRef = useRef(new Compartment());
+  const keymapCompRef = useRef(new Compartment());
 
   const latestProps = useRef({
     onChange,
@@ -257,6 +269,8 @@ export const LatexCodeEditor: React.FC<LatexCodeEditorProps> = ({
     editorFontSize,
     directionMode,
     files,
+    shortcuts,
+    onTriggerWorkspaceShortcut,
     onCursorInfo,
     onScriptDetected,
   });
@@ -267,8 +281,80 @@ export const LatexCodeEditor: React.FC<LatexCodeEditorProps> = ({
     editorFontSize,
     directionMode,
     files,
+    shortcuts,
+    onTriggerWorkspaceShortcut,
     onCursorInfo,
     onScriptDetected,
+  };
+
+  const wrapSelectionWith = (view: EditorView, prefix: string, suffix: string) => {
+    const sel = view.state.selection.main;
+    const selectedText = view.state.sliceDoc(sel.from, sel.to);
+    const insert = `${prefix}${selectedText}${suffix}`;
+    const anchor = selectedText
+      ? sel.from + insert.length
+      : sel.from + prefix.length;
+    view.dispatch({
+      changes: { from: sel.from, to: sel.to, insert },
+      selection: { anchor },
+    });
+    return true;
+  };
+
+  const makeKeymapExtension = (map: ShortcutMap) => {
+    const workspaceActions: WorkspaceShortcutAction[] = [
+      'compile',
+      'togglePreview',
+      'toggleSidebar',
+      'toggleLog',
+      'openFiles',
+      'openSettings',
+    ];
+    const customBindings: KeyBinding[] = [];
+    for (const actionId of workspaceActions) {
+      const key = map[actionId];
+      if (key) {
+        customBindings.push({
+          key,
+          run: () => {
+            latestProps.current.onTriggerWorkspaceShortcut?.(actionId);
+            return true;
+          },
+        });
+      }
+    }
+    if (map.triggerAutocomplete) {
+      customBindings.push({
+        key: map.triggerAutocomplete,
+        run: startCompletion,
+      });
+    }
+    if (map.insertBold) {
+      customBindings.push({
+        key: map.insertBold,
+        run: (view) => wrapSelectionWith(view, '\\textbf{', '}'),
+      });
+    }
+    if (map.insertItalic) {
+      customBindings.push({
+        key: map.insertItalic,
+        run: (view) => wrapSelectionWith(view, '\\textit{', '}'),
+      });
+    }
+    if (map.insertMath) {
+      customBindings.push({
+        key: map.insertMath,
+        run: (view) => wrapSelectionWith(view, '$', '$'),
+      });
+    }
+
+    return keymap.of([
+      ...customBindings,
+      ...defaultKeymap,
+      ...historyKeymap,
+      ...searchKeymap,
+      indentWithTab,
+    ]);
   };
 
   const makeBidiPlugin = (t: EditorTheme, dirMode: DirectionMode) =>
@@ -351,16 +437,7 @@ export const LatexCodeEditor: React.FC<LatexCodeEditorProps> = ({
           activateOnTyping: true,
           maxRenderedOptions: 14,
         }),
-        keymap.of([
-          ...defaultKeymap,
-          ...historyKeymap,
-          ...searchKeymap,
-          indentWithTab,
-          {
-            key: 'Ctrl-Space',
-            run: startCompletion,
-          },
-        ]),
+        keymapCompRef.current.of(makeKeymapExtension(shortcuts)),
         themeCompRef.current.of(
           createEditorThemeExtension(theme, editorFont, editorFontSize)
         ),
@@ -465,9 +542,10 @@ export const LatexCodeEditor: React.FC<LatexCodeEditorProps> = ({
           createEditorThemeExtension(theme, editorFont, editorFontSize)
         ),
         pluginCompRef.current.reconfigure(makeBidiPlugin(theme, directionMode)),
+        keymapCompRef.current.reconfigure(makeKeymapExtension(shortcuts)),
       ],
     });
-  }, [theme, editorFont, editorFontSize, directionMode]);
+  }, [theme, editorFont, editorFontSize, directionMode, shortcuts]);
 
   return (
     <div

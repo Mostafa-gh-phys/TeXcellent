@@ -147,3 +147,18 @@ export interface SyncConfig {
     lastSyncedAt?: string;
   };
 }
+
+export type ShortcutActionId =
+  | 'compile'
+  | 'togglePreview'
+  | 'toggleSidebar'
+  | 'toggleLog'
+  | 'openFiles'
+  | 'openSettings'
+  | 'triggerAutocomplete'
+  | 'insertBold'
+  | 'insertItalic'
+  | 'insertMath';
+
+export type ShortcutMap = Record<ShortcutActionId, string>;
+
