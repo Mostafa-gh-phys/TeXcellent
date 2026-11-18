@@ -23,7 +23,7 @@ interface FileModalProps {
   onCreateFile: (name: string, content?: string) => void;
   onNewBlankProject: (projectName: string) => void;
   onSelectTemplate: (tpl: ProjectTemplate) => void;
-  onImportFiles: (files: ProjectFile[]) => void;
+  onImportFiles: (files: ProjectFile[], folderProjectName?: string) => void;
 }
 
 export const FileModal: React.FC<FileModalProps> = ({
@@ -65,6 +65,27 @@ export const FileModal: React.FC<FileModalProps> = ({
     onClose();
   };
 
+  const inferMimeType = (name: string): string => {
+    const lower = name.toLowerCase();
+    if (lower.endsWith('.png')) return 'image/png';
+    if (lower.endsWith('.jpg') || lower.endsWith('.jpeg')) return 'image/jpeg';
+    if (lower.endsWith('.gif')) return 'image/gif';
+    if (lower.endsWith('.webp')) return 'image/webp';
+    if (lower.endsWith('.svg')) return 'image/svg+xml';
+    if (lower.endsWith('.pdf')) return 'application/pdf';
+    return 'application/octet-stream';
+  };
+
+  const toBase64 = (buf: ArrayBuffer): string => {
+    const bytes = new Uint8Array(buf);
+    let binary = '';
+    const chunkSize = 0x8000;
+    for (let i = 0; i < bytes.length; i += chunkSize) {
+      binary += String.fromCharCode(...bytes.subarray(i, i + chunkSize));
+    }
+    return btoa(binary);
+  };
+
   const handleOpenFiles = async (fileList: FileList | null) => {
     if (!fileList || fileList.length === 0) return;
     const imported: ProjectFile[] = [];
@@ -104,6 +125,17 @@ export const FileModal: React.FC<FileModalProps> = ({
                   : 'latex',
               updatedAt: new Date().toISOString(),
             });
+          } else if (/\.(png|jpe?g|gif|webp|svg|pdf|eps)$/i.test(normalizedEntry)) {
+            const buf = await entry.async('arraybuffer');
+            imported.push({
+              id: `open-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+              name: normalizedEntry,
+              content: '',
+              language: 'asset',
+              binaryBase64: toBase64(buf),
+              mimeType: inferMimeType(normalizedEntry),
+              updatedAt: new Date().toISOString(),
+            });
           } else if (/\.md$/i.test(normalizedEntry)) {
             const mdText = await entry.async('string');
             const texName = normalizedEntry.replace(/\.md$/i, '.tex');
@@ -132,6 +164,17 @@ export const FileModal: React.FC<FileModalProps> = ({
           language: 'latex',
           updatedAt: new Date().toISOString(),
         });
+      } else if (/\.(png|jpe?g|gif|webp|svg|pdf|eps)$/i.test(relName)) {
+        const buf = await file.arrayBuffer();
+        imported.push({
+          id: `open-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+          name: relName,
+          content: '',
+          language: 'asset',
+          binaryBase64: toBase64(buf),
+          mimeType: file.type || inferMimeType(relName),
+          updatedAt: new Date().toISOString(),
+        });
       } else if (/\.(tex|bib|sty|cls|bst|clo|def|cfg|ltx)$/i.test(relName)) {
         const text = await file.text();
         imported.push({
@@ -149,10 +192,10 @@ export const FileModal: React.FC<FileModalProps> = ({
     }
 
     if (imported.length > 0) {
-      onImportFiles(imported);
+      onImportFiles(imported, canStripTop ? topFolder : undefined);
       onClose();
     } else {
-      setFeedback('No supported .tex, .bib, .sty, .cls, .md, or .zip files found.');
+      setFeedback('No supported .tex, .bib, .sty, .cls, .png, .jpg, .svg, .md, or .zip files found.');
     }
   };
 
@@ -340,7 +383,7 @@ export const FileModal: React.FC<FileModalProps> = ({
               ref={openInputRef}
               type="file"
               multiple
-              accept=".tex,.bib,.sty,.cls,.bst,.clo,.def,.cfg,.ltx,.md,.zip"
+              accept=".tex,.bib,.sty,.cls,.bst,.clo,.def,.cfg,.ltx,.md,.zip,.png,.jpg,.jpeg,.gif,.webp,.svg,.pdf,.eps"
               className="hidden"
               onChange={(e) => handleOpenFiles(e.target.files)}
             />

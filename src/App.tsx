@@ -26,6 +26,7 @@ import { EDITOR_THEMES } from './utils/themes';
 import { EDITOR_FONTS } from './utils/editorFonts';
 import {
   createInitialProject,
+  createInitialProjects,
   migrateLegacyDefaultProject,
   ProjectTemplate,
 } from './utils/defaultProjects';
@@ -37,6 +38,7 @@ import {
 } from './utils/compilerArgs';
 import {
   inferFileLanguage,
+  isImageAssetFile,
   normalizeProjectFilePath,
   stripSharedRootFolder,
 } from './utils/fileTree';
@@ -57,6 +59,8 @@ import { TeXcellentLogo } from './components/TeXcellentLogo';
 import { FileTreeSidebar } from './components/FileTreeSidebar';
 
 const STORAGE_PROJECT_KEY = 'texcellent_project_v1';
+const STORAGE_PROJECTS_KEY = 'texcellent_projects_v1';
+const STORAGE_ACTIVE_PROJECT_KEY = 'texcellent_active_project_v1';
 const STORAGE_TABS_KEY = 'texcellent_open_tabs_v1';
 const STORAGE_THEME_KEY = 'texcellent_theme_v1';
 const STORAGE_FONT_KEY = 'texcellent_font_v1';
@@ -113,9 +117,45 @@ export default function App() {
     typeof window !== 'undefined' &&
     new URLSearchParams(window.location.search).get('preview') === 'external';
 
-  const [project, setProject] = useState<LatexProject>(() =>
-    migrateLegacyDefaultProject(loadJson<LatexProject>(STORAGE_PROJECT_KEY, createInitialProject()))
+  const [projects, setProjects] = useState<LatexProject[]>(() => {
+    const savedMulti = loadJson<LatexProject[] | null>(STORAGE_PROJECTS_KEY, null);
+    if (Array.isArray(savedMulti) && savedMulti.length > 0) {
+      return savedMulti.map((p) => migrateLegacyDefaultProject(p));
+    }
+    const legacySingle = loadJson<LatexProject | null>(STORAGE_PROJECT_KEY, null);
+    const defaults = createInitialProjects();
+    if (legacySingle && Array.isArray(legacySingle.files) && legacySingle.files.length > 0) {
+      const migrated = migrateLegacyDefaultProject(legacySingle);
+      const rest = defaults.filter((d) => d.id !== migrated.id && d.name !== migrated.name);
+      return [migrated, ...rest];
+    }
+    return defaults;
+  });
+
+  const [activeProjectId, setActiveProjectId] = useState<string>(() => {
+    const savedId = loadJson<string>(STORAGE_ACTIVE_PROJECT_KEY, '');
+    return savedId || projects[0]?.id || 'proj-default';
+  });
+
+  const project =
+    projects.find((p) => p.id === activeProjectId) || projects[0] || createInitialProject();
+
+  const setProject = useCallback(
+    (updater: LatexProject | ((prev: LatexProject) => LatexProject)) => {
+      setProjects((prevList) => {
+        const current =
+          prevList.find((p) => p.id === activeProjectId) || prevList[0] || createInitialProject();
+        const next = typeof updater === 'function' ? updater(current) : updater;
+        const idx = prevList.findIndex((p) => p.id === current.id);
+        if (idx === -1) return [...prevList, next];
+        const copy = [...prevList];
+        copy[idx] = next;
+        return copy;
+      });
+    },
+    [activeProjectId]
   );
+
   const [activeFileId, setActiveFileId] = useState<string>(
     () => project.mainFileId || project.files[0]?.id || 'main-tex'
   );
@@ -221,11 +261,13 @@ export default function App() {
   // Persist workspace state
   useEffect(() => {
     try {
+      localStorage.setItem(STORAGE_PROJECTS_KEY, JSON.stringify(projects));
+      localStorage.setItem(STORAGE_ACTIVE_PROJECT_KEY, JSON.stringify(activeProjectId));
       localStorage.setItem(STORAGE_PROJECT_KEY, JSON.stringify(project));
     } catch {
       // ignore storage quota errors
     }
-  }, [project]);
+  }, [projects, activeProjectId, project]);
 
   useEffect(() => {
     try {
@@ -456,43 +498,175 @@ export default function App() {
     }));
   };
 
-  const handleCreateFile = useCallback((rawPath: string, content?: string) => {
-    const clean = normalizeProjectFilePath(rawPath);
-    const finalName = /\.(tex|bib|sty|cls)$/i.test(clean) ? clean : `${clean}.tex`;
-    const newFile: ProjectFile = {
-      id: `file-${Date.now()}-${Math.random().toString(36).slice(2, 5)}`,
-      name: finalName,
-      content:
-        content ??
-        (finalName.endsWith('.bib')
-          ? `@article{key2026,\n  author = {Author},\n  title = {Title},\n  year = {2026}\n}\n`
-          : `% ${finalName}\n\\section{New Section}\n`),
-      language: inferFileLanguage(finalName),
-      updatedAt: new Date().toISOString(),
-    };
-    setProject((prev) => ({
-      ...prev,
-      files: [...prev.files, newFile],
-      updatedAt: new Date().toISOString(),
-    }));
-    setActiveFileId(newFile.id);
-    setOpenTabIds((prev) => [...prev, newFile.id]);
-  }, []);
+  const handleSelectProjectFile = useCallback(
+    (targetProjectId: string, fileId: string) => {
+      const targetProj = projects.find((p) => p.id === targetProjectId);
+      if (!targetProj) return;
+      if (targetProjectId !== activeProjectId) {
+        setActiveProjectId(targetProjectId);
+        setActiveFileId(fileId);
+        const mainOrFirst = targetProj.mainFileId || targetProj.files[0]?.id;
+        setOpenTabIds(
+          mainOrFirst && mainOrFirst !== fileId ? [mainOrFirst, fileId] : [fileId]
+        );
+        const preferredMode = inferProjectCompilerMode(
+          targetProj.files,
+          compilerSettings.compilerMode
+        );
+        if (preferredMode !== compilerSettings.compilerMode) {
+          setCompilerSettings((prev) => ({ ...prev, compilerMode: preferredMode }));
+        }
+        setCompileRequestTick((t) => t + 1);
+      } else {
+        openFileTab(fileId);
+      }
+    },
+    [projects, activeProjectId, openFileTab, compilerSettings.compilerMode]
+  );
 
-  const handleDeleteFile = (fileId: string) => {
-    if (project.files.length <= 1 || fileId === project.mainFileId) return;
-    const remaining = project.files.filter((f) => f.id !== fileId);
-    setProject((prev) => ({
-      ...prev,
-      files: remaining,
-      updatedAt: new Date().toISOString(),
-    }));
-    setOpenTabIds((prev) => {
-      const filtered = prev.filter((id) => id !== fileId);
-      return filtered.length > 0 ? filtered : [remaining[0].id];
-    });
-    if (activeFileId === fileId) {
-      setActiveFileId(remaining[0].id);
+  const handleCreateFile = useCallback(
+    (rawPath: string, content?: string, targetProjectId?: string) => {
+      const clean = normalizeProjectFilePath(rawPath);
+      const finalName = /\.(tex|bib|sty|cls|png|jpe?g|gif|webp|svg|pdf|eps)$/i.test(clean)
+        ? clean
+        : `${clean}.tex`;
+      const lang = inferFileLanguage(finalName);
+      const newFile: ProjectFile = {
+        id: `file-${Date.now()}-${Math.random().toString(36).slice(2, 5)}`,
+        name: finalName,
+        content:
+          content ??
+          (finalName.endsWith('.bib')
+            ? `@article{key2026,\n  author = {Author},\n  title = {Title},\n  year = {2026}\n}\n`
+            : lang === 'asset'
+              ? ''
+              : `% ${finalName}\n\\section{New Section}\n`),
+        language: lang,
+        updatedAt: new Date().toISOString(),
+      };
+      const projId = targetProjectId || project.id;
+      setProjects((prevList) =>
+        prevList.map((p) =>
+          p.id === projId
+            ? { ...p, files: [...p.files, newFile], updatedAt: new Date().toISOString() }
+            : p
+        )
+      );
+      if (projId !== activeProjectId) {
+        setActiveProjectId(projId);
+        setOpenTabIds([newFile.id]);
+        setCompileRequestTick((t) => t + 1);
+      } else {
+        setOpenTabIds((prev) => [...prev, newFile.id]);
+      }
+      setActiveFileId(newFile.id);
+    },
+    [project.id, activeProjectId]
+  );
+
+  const handleUploadAssetsToProject = useCallback(
+    async (targetProjectId: string, fileList: FileList) => {
+      const items = Array.from(fileList);
+      if (!items.length) return;
+
+      const toBase64 = (buf: ArrayBuffer): string => {
+        const bytes = new Uint8Array(buf);
+        let binary = '';
+        const chunkSize = 0x8000;
+        for (let i = 0; i < bytes.length; i += chunkSize) {
+          binary += String.fromCharCode(...bytes.subarray(i, i + chunkSize));
+        }
+        return btoa(binary);
+      };
+
+      const added: ProjectFile[] = [];
+      for (let i = 0; i < items.length; i++) {
+        const f = items[i];
+        const cleanName = normalizeProjectFilePath(f.name);
+        const lang = inferFileLanguage(cleanName);
+        if (lang === 'asset') {
+          const buf = await f.arrayBuffer();
+          added.push({
+            id: `asset-${Date.now()}-${i}`,
+            name: cleanName,
+            content: '',
+            language: 'asset',
+            binaryBase64: toBase64(buf),
+            mimeType: f.type || 'image/png',
+            updatedAt: new Date().toISOString(),
+          });
+        } else {
+          const text = await f.text();
+          added.push({
+            id: `file-${Date.now()}-${i}`,
+            name: cleanName,
+            content: text,
+            language: lang,
+            updatedAt: new Date().toISOString(),
+          });
+        }
+      }
+
+      if (!added.length) return;
+      setProjects((prevList) =>
+        prevList.map((p) => {
+          if (p.id !== targetProjectId) return p;
+          const merged = [...p.files];
+          for (const nextFile of added) {
+            const idx = merged.findIndex((existing) => existing.name === nextFile.name);
+            if (idx !== -1) merged[idx] = { ...merged[idx], ...nextFile, id: merged[idx].id };
+            else merged.push(nextFile);
+          }
+          return { ...p, files: merged, updatedAt: new Date().toISOString() };
+        })
+      );
+      if (targetProjectId !== activeProjectId) {
+        setActiveProjectId(targetProjectId);
+        setOpenTabIds([added[0].id]);
+      } else {
+        setOpenTabIds((prev) =>
+          prev.includes(added[0].id) ? prev : [...prev, added[0].id]
+        );
+      }
+      setActiveFileId(added[0].id);
+    },
+    [activeProjectId]
+  );
+
+  const handleDeleteFile = (fileId: string, targetProjectId?: string) => {
+    const projId = targetProjectId || project.id;
+    const targetProj = projects.find((p) => p.id === projId);
+    if (!targetProj || targetProj.files.length <= 1 || fileId === targetProj.mainFileId) return;
+    const remaining = targetProj.files.filter((f) => f.id !== fileId);
+    setProjects((prevList) =>
+      prevList.map((p) =>
+        p.id === projId
+          ? { ...p, files: remaining, updatedAt: new Date().toISOString() }
+          : p
+      )
+    );
+    if (projId === activeProjectId) {
+      setOpenTabIds((prev) => {
+        const filtered = prev.filter((id) => id !== fileId);
+        return filtered.length > 0 ? filtered : [remaining[0].id];
+      });
+      if (activeFileId === fileId) {
+        setActiveFileId(remaining[0].id);
+      }
+    }
+  };
+
+  const handleDeleteProject = (targetProjectId: string) => {
+    if (projects.length <= 1) return;
+    const remaining = projects.filter((p) => p.id !== targetProjectId);
+    setProjects(remaining);
+    if (activeProjectId === targetProjectId && remaining[0]) {
+      const nextProj = remaining[0];
+      setActiveProjectId(nextProj.id);
+      const nextMain = nextProj.mainFileId || nextProj.files[0]?.id;
+      setActiveFileId(nextMain);
+      setOpenTabIds(nextMain ? [nextMain] : []);
+      setCompileRequestTick((t) => t + 1);
     }
   };
 
@@ -502,7 +676,8 @@ export default function App() {
       ...tpl.project,
       updatedAt: new Date().toISOString(),
     };
-    setProject(nextProject);
+    setProjects((prev) => [...prev, nextProject]);
+    setActiveProjectId(nextProject.id);
     setActiveFileId(nextProject.mainFileId);
     setOpenTabIds([nextProject.mainFileId]);
     setCompilerSettings((prev) => ({
@@ -512,7 +687,7 @@ export default function App() {
     setCompileRequestTick((t) => t + 1);
   };
 
-  const handleImportFiles = (incoming: ProjectFile[]) => {
+  const handleImportFiles = (incoming: ProjectFile[], folderProjectName?: string) => {
     if (!incoming.length) return;
     let firstSelectedId = incoming[0].id;
     const openIds: string[] = [];
@@ -525,6 +700,31 @@ export default function App() {
           /\\documentclass(?:\[[^\]]*\])?\s*\{/i.test(f.content)
       );
 
+    if (folderProjectName) {
+      const primary = mainCandidate || incoming.find((f) => f.language === 'latex') || incoming[0];
+      const preferredMode = inferPreferredCompilerMode(
+        primary.content,
+        compilerSettings.compilerMode
+      );
+      const created: LatexProject = {
+        id: `proj-import-${Date.now()}`,
+        name: folderProjectName,
+        mainFileId: primary.id,
+        compilerMode: preferredMode,
+        files: incoming.map((f) => ({ ...f, name: normalizeProjectFilePath(f.name) })),
+        updatedAt: new Date().toISOString(),
+      };
+      setProjects((prev) => [...prev, created]);
+      setActiveProjectId(created.id);
+      setActiveFileId(primary.id);
+      setOpenTabIds([primary.id]);
+      if (preferredMode !== compilerSettings.compilerMode) {
+        setCompilerSettings((prev) => ({ ...prev, compilerMode: preferredMode }));
+      }
+      setCompileRequestTick((t) => t + 1);
+      return;
+    }
+
     setProject((prev) => {
       const merged = [...prev.files];
       let nextMainId = prev.mainFileId;
@@ -532,7 +732,14 @@ export default function App() {
         const cleanName = normalizeProjectFilePath(file.name);
         const idx = merged.findIndex((f) => f.name === cleanName);
         if (idx !== -1) {
-          merged[idx] = { ...merged[idx], content: file.content, updatedAt: file.updatedAt };
+          merged[idx] = {
+            ...merged[idx],
+            content: file.content,
+            binaryBase64: file.binaryBase64,
+            mimeType: file.mimeType,
+            language: file.language,
+            updatedAt: file.updatedAt,
+          };
           openIds.push(merged[idx].id);
           if (file.id === incoming[0].id) firstSelectedId = merged[idx].id;
           if (mainCandidate && file.id === mainCandidate.id) nextMainId = merged[idx].id;
@@ -575,23 +782,35 @@ export default function App() {
     if (!fileList || fileList.length === 0) return;
     const rawFiles = Array.from(fileList).filter((f) => {
       const rel = (f as File & { webkitRelativePath?: string }).webkitRelativePath || f.name;
-      return /\.(tex|bib|sty|cls|bst|clo|def|cfg|ltx|md)$/i.test(rel);
+      return /\.(tex|bib|sty|cls|bst|clo|def|cfg|ltx|md|png|jpe?g|gif|webp|svg|pdf|eps)$/i.test(
+        rel
+      );
     });
     if (rawFiles.length === 0) return;
+
+    const toBase64 = (buf: ArrayBuffer): string => {
+      const bytes = new Uint8Array(buf);
+      let binary = '';
+      const chunkSize = 0x8000;
+      for (let i = 0; i < bytes.length; i += chunkSize) {
+        binary += String.fromCharCode(...bytes.subarray(i, i + chunkSize));
+      }
+      return btoa(binary);
+    };
 
     const rawPaths = rawFiles.map(
       (f) => (f as File & { webkitRelativePath?: string }).webkitRelativePath || f.name
     );
     const folderTitle =
-      rawPaths[0].includes('/') ? rawPaths[0].split('/')[0] : project.name;
+      rawPaths[0].includes('/') ? rawPaths[0].split('/')[0] : 'Opened Folder';
     const strippedPaths = stripSharedRootFolder(rawPaths);
 
     const nextFiles: ProjectFile[] = [];
     for (let i = 0; i < rawFiles.length; i++) {
       const f = rawFiles[i];
       const relPath = strippedPaths[i];
-      const text = await f.text();
       if (/\.md$/i.test(relPath)) {
+        const text = await f.text();
         const texName = relPath.replace(/\.md$/i, '.tex');
         nextFiles.push({
           id: `dir-${Date.now()}-${i}`,
@@ -603,7 +822,19 @@ export default function App() {
           language: 'latex',
           updatedAt: new Date().toISOString(),
         });
+      } else if (/\.(png|jpe?g|gif|webp|svg|pdf|eps)$/i.test(relPath)) {
+        const buf = await f.arrayBuffer();
+        nextFiles.push({
+          id: `dir-${Date.now()}-${i}`,
+          name: relPath,
+          content: '',
+          language: 'asset',
+          binaryBase64: toBase64(buf),
+          mimeType: f.type || 'image/png',
+          updatedAt: new Date().toISOString(),
+        });
       } else {
+        const text = await f.text();
         nextFiles.push({
           id: `dir-${Date.now()}-${i}`,
           name: relPath,
@@ -630,14 +861,16 @@ export default function App() {
       compilerSettings.compilerMode
     );
 
-    setProject({
+    const nextProject: LatexProject = {
       id: `proj-folder-${Date.now()}`,
       name: folderTitle || 'Opened Folder',
       mainFileId: primaryFile.id,
       compilerMode: preferredMode,
       files: nextFiles,
       updatedAt: new Date().toISOString(),
-    });
+    };
+    setProjects((prev) => [...prev, nextProject]);
+    setActiveProjectId(nextProject.id);
     setActiveFileId(primaryFile.id);
     setOpenTabIds([primaryFile.id]);
     if (preferredMode !== compilerSettings.compilerMode) {
@@ -678,7 +911,8 @@ Write your document here.
         },
       ],
     };
-    setProject(nextProject);
+    setProjects((prev) => [...prev, nextProject]);
+    setActiveProjectId(nextProject.id);
     setActiveFileId(mainId);
     setOpenTabIds([mainId]);
     setCompileRequestTick((t) => t + 1);
@@ -1009,19 +1243,24 @@ Write your document here.
         {showSidebar && (
           <FileTreeSidebar
             theme={theme}
-            files={project.files}
-            mainFileId={project.mainFileId}
+            projects={projects}
+            activeProjectId={project.id}
             activeFileId={activeFile?.id || ''}
-            onSelectFile={openFileTab}
-            onSetMainFile={(fileId) =>
-              setProject((prev) => ({
-                ...prev,
-                mainFileId: fileId,
-                updatedAt: new Date().toISOString(),
-              }))
+            onSelectProjectFile={handleSelectProjectFile}
+            onSetMainFile={(projectId, fileId) =>
+              setProjects((prevList) =>
+                prevList.map((p) =>
+                  p.id === projectId
+                    ? { ...p, mainFileId: fileId, updatedAt: new Date().toISOString() }
+                    : p
+                )
+              )
             }
-            onAddFile={(filePath) => handleCreateFile(filePath)}
-            onDeleteFile={handleDeleteFile}
+            onAddFile={(projectId, filePath) => handleCreateFile(filePath, undefined, projectId)}
+            onUploadAssets={handleUploadAssetsToProject}
+            onDeleteFile={(projectId, fileId) => handleDeleteFile(fileId, projectId)}
+            onCreateProject={handleNewBlankProject}
+            onDeleteProject={handleDeleteProject}
             onOpenFolderClick={() => sidebarFolderInputRef.current?.click()}
           />
         )}
@@ -1107,19 +1346,55 @@ Write your document here.
             )}
 
             <div className="flex-1 min-h-0 overflow-hidden">
-              {activeFile && (
-                <LatexCodeEditor
-                  value={activeFile.content}
-                  onChange={handleFileContentChange}
-                  theme={theme}
-                  editorFont={editorFont}
-                  editorFontSize={editorFontSize}
-                  directionMode={directionMode}
-                  files={project.files}
-                  onCursorInfo={setCursorInfo}
-                  onScriptDetected={setKeyboardScript}
-                  editorRefOut={editorActionsRef}
-                />
+              {activeFile && activeFile.language === 'asset' ? (
+                <div
+                  className="h-full w-full flex flex-col items-center justify-center p-6 overflow-auto gap-4"
+                  style={{ backgroundColor: theme.editor.bg, color: theme.ui.text }}
+                >
+                  {activeFile.binaryBase64 && isImageAssetFile(activeFile.name) ? (
+                    <img
+                      src={`data:${activeFile.mimeType || 'image/png'};base64,${activeFile.binaryBase64}`}
+                      alt={activeFile.name}
+                      className="max-h-[60%] max-w-full rounded border object-contain bg-white p-2 shadow-sm"
+                      style={{ borderColor: theme.ui.border }}
+                    />
+                  ) : (
+                    <div
+                      className="px-4 py-3 rounded-lg border text-xs font-mono"
+                      style={{ borderColor: theme.ui.border, backgroundColor: theme.ui.surface }}
+                    >
+                      Binary Asset: {activeFile.name}
+                    </div>
+                  )}
+                  <div className="text-center space-y-2 max-w-md">
+                    <div className="text-xs font-mono font-semibold">{activeFile.name}</div>
+                    <div
+                      className="px-3 py-1.5 rounded border text-xs font-mono select-all"
+                      style={{
+                        borderColor: theme.ui.border,
+                        backgroundColor: theme.ui.surface,
+                        color: theme.ui.textMuted,
+                      }}
+                    >
+                      {`\\includegraphics[width=0.8\\textwidth]{${activeFile.name}}`}
+                    </div>
+                  </div>
+                </div>
+              ) : (
+                activeFile && (
+                  <LatexCodeEditor
+                    value={activeFile.content}
+                    onChange={handleFileContentChange}
+                    theme={theme}
+                    editorFont={editorFont}
+                    editorFontSize={editorFontSize}
+                    directionMode={directionMode}
+                    files={project.files}
+                    onCursorInfo={setCursorInfo}
+                    onScriptDetected={setKeyboardScript}
+                    editorRefOut={editorActionsRef}
+                  />
+                )
               )}
             </div>
 

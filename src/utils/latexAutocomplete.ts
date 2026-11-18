@@ -6,7 +6,7 @@ export interface LatexCompletionItem {
   insertText: string;
   detail: string;
   pkg: string;
-  kind: 'command' | 'environment' | 'package' | 'reference' | 'citation' | 'snippet';
+  kind: 'command' | 'environment' | 'package' | 'option' | 'reference' | 'citation' | 'snippet';
 }
 
 export const PACKAGE_CATALOG: Array<{ name: string; description: string }> = [
@@ -16,6 +16,7 @@ export const PACKAGE_CATALOG: Array<{ name: string; description: string }> = [
   { name: 'xepersian', description: 'Persian/Farsi typesetting for XeLaTeX' },
   { name: 'polyglossia', description: 'Modern multilingual typesetting for XeLaTeX/LuaLaTeX' },
   { name: 'fontspec', description: 'OpenType & TrueType font selection' },
+  { name: 'babel', description: 'Multilingual hyphenation & localization support' },
   { name: 'graphicx', description: 'Enhanced graphics and \\includegraphics support' },
   { name: 'hyperref', description: 'Hyperlinks, PDF bookmarks & \\href' },
   { name: 'geometry', description: 'Flexible page dimensions and margins' },
@@ -30,7 +31,318 @@ export const PACKAGE_CATALOG: Array<{ name: string; description: string }> = [
   { name: 'tcolorbox', description: 'Colored theorem, proof, and callout boxes' },
   { name: 'fancyhdr', description: 'Custom page headers and footers' },
   { name: 'amsthm', description: 'Theorem, lemma, and proof environments' },
+  { name: 'enumitem', description: 'Custom itemize, enumerate & description spacing' },
+  { name: 'microtype', description: 'Subliminal typographic protrusion & expansion' },
+  { name: 'siunitx', description: 'SI units, scientific notation & number alignment' },
+  { name: 'caption', description: 'Customize figure and table caption styling' },
+  { name: 'subcaption', description: 'Subfigures and subtables with captions' },
+  { name: 'float', description: 'Exact [H] float placement specifier' },
+  { name: 'setspace', description: 'Single, one-and-a-half & double line spacing' },
+  { name: 'parskip', description: 'Zero paragraph indent with vertical spacing' },
+  { name: 'multicol', description: 'Balanced multi-column layouts' },
+  { name: 'inputenc', description: 'Input character encoding (for PDFLaTeX)' },
+  { name: 'fontenc', description: 'Output font encoding (T1/OT1)' },
 ];
+
+export interface PackageOptionSpec {
+  option: string;
+  insert?: string;
+  detail: string;
+}
+
+export const PACKAGE_OPTIONS_CATALOG: Record<string, PackageOptionSpec[]> = {
+  geometry: [
+    { option: 'a4paper', detail: 'ISO A4 page dimensions (210mm x 297mm)' },
+    { option: 'letterpaper', detail: 'US Letter page dimensions (8.5in x 11in)' },
+    { option: 'a5paper', detail: 'ISO A5 page dimensions' },
+    { option: 'b5paper', detail: 'ISO B5 page dimensions' },
+    { option: 'margin=1in', detail: 'Equal 1-inch margins on all sides' },
+    { option: 'margin=2.5cm', detail: 'Equal 2.5cm margins on all sides' },
+    { option: 'top=2.5cm', detail: 'Top page margin' },
+    { option: 'bottom=2.5cm', detail: 'Bottom page margin' },
+    { option: 'left=2.5cm', detail: 'Left page margin' },
+    { option: 'right=2.5cm', detail: 'Right page margin' },
+    { option: 'inner=3cm', detail: 'Inner binding margin (twoside)' },
+    { option: 'outer=2cm', detail: 'Outer margin (twoside)' },
+    { option: 'landscape', detail: 'Rotate page to landscape orientation' },
+    { option: 'portrait', detail: 'Standard portrait orientation' },
+    { option: 'twoside', detail: 'Alternating inner/outer margins for printing' },
+    { option: 'includehead', detail: 'Include header height inside margin' },
+    { option: 'includefoot', detail: 'Include footer height inside margin' },
+    { option: 'headheight=14pt', detail: 'Header box height (useful with fancyhdr)' },
+    { option: 'footskip=24pt', detail: 'Distance from text body to footer baseline' },
+    { option: 'showframe', detail: 'Draw visible layout guides around margins' },
+    { option: 'pass', detail: 'Disable geometry layout overrides' },
+  ],
+  hyperref: [
+    { option: 'colorlinks=true', detail: 'Color link text instead of drawing boxes' },
+    { option: 'colorlinks=false', detail: 'Draw boxes around links (default)' },
+    { option: 'hidelinks', detail: 'Hide both link colors and border boxes' },
+    { option: 'linkcolor=blue', detail: 'Color for internal cross-reference links' },
+    { option: 'citecolor=teal', detail: 'Color for bibliography citations' },
+    { option: 'urlcolor=blue', detail: 'Color for external URLs' },
+    { option: 'filecolor=magenta', detail: 'Color for local file links' },
+    { option: 'bookmarks=true', detail: 'Generate PDF outline bookmarks' },
+    { option: 'bookmarksopen=true', detail: 'Expand PDF bookmark tree by default' },
+    { option: 'bookmarksnumbered=true', detail: 'Include section numbers in PDF bookmarks' },
+    { option: 'breaklinks=true', detail: 'Allow long URLs/links to wrap across lines' },
+    { option: 'unicode=true', detail: 'Enable Unicode PDF bookmarks (XePersian/UTF-8)' },
+    { option: 'pdftitle={}', detail: 'Embed PDF document title metadata' },
+    { option: 'pdfauthor={}', detail: 'Embed PDF document author metadata' },
+    { option: 'pdfsubject={}', detail: 'Embed PDF subject metadata' },
+    { option: 'draft', detail: 'Disable hyperlinking during draft builds' },
+  ],
+  xepersian: [
+    { option: 'KashidaOn', detail: 'Enable Persian Kashida text justification' },
+    { option: 'KashidaOff', detail: 'Disable Kashida justification' },
+    { option: 'extrafootnotefeatures', detail: 'Enable RTL/LTR multi-column footnote helpers' },
+    { option: 'localise=on', detail: 'Localize captions, dates & section strings to Persian' },
+    { option: 'localise=off', detail: 'Keep standard English localization strings' },
+    { option: 'quickindex', detail: 'Faster Persian index sorting support' },
+    { option: 'compute', detail: 'Enable built-in Persian arithmetic/date helpers' },
+    { option: 'displaymathdigits=persian', detail: 'Render display math numerals with Persian digits' },
+    { option: 'displaymathdigits=default', detail: 'Keep Western/default digits in display math' },
+  ],
+  xcolor: [
+    { option: 'dvipsnames', detail: 'Load 68 standard named dvips colors (NavyBlue, OliveGreen...)' },
+    { option: 'svgnames', detail: 'Load 151 SVG 1.1 named colors' },
+    { option: 'x11names', detail: 'Load 317 X11 named colors' },
+    { option: 'table', detail: 'Enable \\rowcolor, \\columncolor & \\cellcolor in tables' },
+    { option: 'HTML', detail: 'Define colors using 6-digit hex codes' },
+    { option: 'rgb', detail: 'Default RGB color model' },
+    { option: 'cmyk', detail: 'CMYK print color model' },
+    { option: 'gray', detail: 'Grayscale monochrome output' },
+    { option: 'hyperref', detail: 'Enable xcolor integration with hyperref' },
+  ],
+  graphicx: [
+    { option: 'final', detail: 'Render full images (overrides document draft)' },
+    { option: 'draft', detail: 'Draw framed bounding boxes instead of images' },
+    { option: 'demo', detail: 'Replace missing/all images with black rectangles' },
+    { option: 'hiresbb', detail: 'Read HiResBoundingBox from EPS/PDF files' },
+    { option: 'pdftex', detail: 'Explicit PDFTeX graphics driver' },
+    { option: 'xetex', detail: 'Explicit XeTeX graphics driver' },
+    { option: 'luatex', detail: 'Explicit LuaTeX graphics driver' },
+  ],
+  babel: [
+    { option: 'english', detail: 'English hyphenation and labels' },
+    { option: 'persian', detail: 'Persian language rules' },
+    { option: 'arabic', detail: 'Arabic language rules' },
+    { option: 'french', detail: 'French typography & spacing' },
+    { option: 'ngerman', detail: 'New German orthography' },
+    { option: 'spanish', detail: 'Spanish labels & hyphenation' },
+    { option: 'main=english', detail: 'Set English as primary document language' },
+    { option: 'provide=*', detail: 'Auto-load INI definitions for languages' },
+  ],
+  fontspec: [
+    { option: 'no-math', detail: 'Leave TeX math fonts untouched' },
+    { option: 'quiet', detail: 'Suppress font warning messages in log' },
+    { option: 'silent', detail: 'Suppress font warnings and info messages' },
+    { option: 'cm-default', detail: 'Keep Computer Modern math font defaults' },
+    { option: 'lm-default', detail: 'Use Latin Modern defaults' },
+  ],
+  polyglossia: [
+    { option: 'xetex', detail: 'XeTeX engine mode' },
+    { option: 'luatex', detail: 'LuaTeX engine mode' },
+  ],
+  biblatex: [
+    { option: 'backend=biber', detail: 'Use modern Unicode Biber backend (recommended)' },
+    { option: 'backend=bibtex', detail: 'Use legacy BibTeX backend' },
+    { option: 'style=numeric', detail: 'Numeric citation style [1], [2]' },
+    { option: 'style=ieee', detail: 'IEEE citation & bibliography style' },
+    { option: 'style=apa', detail: 'APA author-year bibliography style' },
+    { option: 'style=authoryear', detail: 'Author-year citation style' },
+    { option: 'style=alphabetic', detail: 'Alphabetic citation labels [Rud87]' },
+    { option: 'sorting=none', detail: 'Sort bibliography in order of citation' },
+    { option: 'sorting=nyt', detail: 'Sort by name, year, title' },
+    { option: 'sortcites=true', detail: 'Sort multiple keys inside \\cite{...}' },
+    { option: 'natbib=true', detail: 'Enable \\citep / \\citet compatibility aliases' },
+    { option: 'hyperref=true', detail: 'Turn citations into clickable links' },
+    { option: 'backref=true', detail: 'Show back-reference pages in bibliography' },
+    { option: 'giveninits=true', detail: 'Abbreviate author first names to initials' },
+  ],
+  natbib: [
+    { option: 'numbers', detail: 'Use numeric citations [1]' },
+    { option: 'authoryear', detail: 'Use author-year citations (default)' },
+    { option: 'super', detail: 'Superscript citation numbers' },
+    { option: 'round', detail: 'Round parentheses (Author, 2026)' },
+    { option: 'square', detail: 'Square brackets [Author, 2026]' },
+    { option: 'sort', detail: 'Sort multiple citations' },
+    { option: 'sort&compress', detail: 'Sort and compress consecutive numbers [1-4]' },
+    { option: 'comma', detail: 'Separate multiple citations with commas' },
+    { option: 'sectionbib', detail: 'Format bibliography as \\section* instead of chapter' },
+  ],
+  amsmath: [
+    { option: 'fleqn', detail: 'Flush display equations left instead of centered' },
+    { option: 'leqno', detail: 'Place equation numbers on the left' },
+    { option: 'reqno', detail: 'Place equation numbers on the right (default)' },
+    { option: 'intlimits', detail: 'Place integral limits above/below \\int' },
+    { option: 'nointlimits', detail: 'Place integral limits beside \\int' },
+    { option: 'sumlimits', detail: 'Place summation limits above/below \\sum' },
+    { option: 'centertags', detail: 'Center equation number in split equations' },
+    { option: 'tbtags', detail: 'Align equation number with top/bottom line of split' },
+  ],
+  mathtools: [
+    { option: 'showonlyrefs', detail: 'Number only equations actually referenced by \\eqref' },
+    { option: 'fleqn', detail: 'Flush equations left' },
+    { option: 'tbtags', detail: 'Top-or-bottom equation tag alignment' },
+  ],
+  tcolorbox: [
+    { option: 'most', detail: 'Load commonly used libraries (skins, breakable, theorems...)' },
+    { option: 'all', detail: 'Load all tcolorbox libraries' },
+    { option: 'skins', detail: 'Enable enhanced vector skins & shadows' },
+    { option: 'breakable', detail: 'Allow colored boxes to break across pages' },
+    { option: 'theorems', detail: 'Enable numbered theorem box helpers' },
+    { option: 'listings', detail: 'Integrate code listings inside tcolorbox' },
+  ],
+  algorithm2e: [
+    { option: 'ruled', detail: 'Draw horizontal rules at top & bottom of algorithm' },
+    { option: 'vlined', detail: 'Draw vertical block-ending L-lines' },
+    { option: 'boxed', detail: 'Enclose algorithm inside a frame box' },
+    { option: 'linesnumbered', detail: 'Print line numbers on each step' },
+    { option: 'commentsnumbered', detail: 'Number comment lines too' },
+    { option: 'longend', detail: 'Show explicit end-if / end-for statements' },
+  ],
+  inputenc: [
+    { option: 'utf8', detail: 'UTF-8 Unicode input encoding' },
+    { option: 'latin1', detail: 'ISO-8859-1 Western encoding' },
+  ],
+  fontenc: [
+    { option: 'T1', detail: 'Modern 8-bit Cork font encoding (PDFLaTeX)' },
+    { option: 'OT1', detail: 'Original 7-bit TeX font encoding' },
+    { option: 'TU', detail: 'Unicode encoding for XeLaTeX/LuaLaTeX' },
+  ],
+  enumitem: [
+    { option: 'inline', detail: 'Provide enumerate*, itemize*, description* inline lists' },
+    { option: 'shortlabels', detail: 'Support short label syntax like [a)] or [1.]' },
+  ],
+  microtype: [
+    { option: 'final', detail: 'Enable microtypography in final mode' },
+    { option: 'draft', detail: 'Disable microtype during draft builds' },
+    { option: 'expansion=true', detail: 'Enable font expansion for cleaner justification' },
+    { option: 'protrusion=true', detail: 'Enable hanging punctuation margin protrusion' },
+    { option: 'babel=true', detail: 'Automatically adapt settings to active language' },
+  ],
+  siunitx: [
+    { option: 'per-mode=symbol', detail: 'Display units with slash (m/s)' },
+    { option: 'per-mode=fraction', detail: 'Display units as fractions' },
+    { option: 'separate-uncertainty=true', detail: 'Format errors with ± symbol' },
+    { option: 'detect-all', detail: 'Match surrounding text weight and font family' },
+    { option: 'locale=US', detail: 'Use dot decimal marker' },
+  ],
+  caption: [
+    { option: 'font=small', detail: 'Use smaller font size for captions' },
+    { option: 'labelfont=bf', detail: 'Make Figure/Table label bold' },
+    { option: 'format=hang', detail: 'Indent wrapped caption lines past label' },
+    { option: 'justification=centering', detail: 'Center caption text' },
+    { option: 'labelsep=colon', detail: 'Use colon after Figure/Table number' },
+  ],
+  subcaption: [
+    { option: 'labelformat=parens', detail: 'Format subfigure labels as (a), (b)' },
+    { option: 'labelfont=rm', detail: 'Use upright label font' },
+  ],
+  setspace: [
+    { option: 'singlespacing', detail: 'Standard single line spacing' },
+    { option: 'onehalfspacing', detail: '1.5x line spacing' },
+    { option: 'doublespacing', detail: '2x double line spacing' },
+    { option: 'nodisplayskipstretch', detail: 'Keep math display vertical spacing compact' },
+  ],
+  parskip: [
+    { option: 'parfill', detail: 'Ensure last line of paragraph ends cleanly' },
+    { option: 'skip=0.5\\baselineskip', detail: 'Custom vertical space between paragraphs' },
+    { option: 'indent=0pt', detail: 'Set paragraph first-line indentation' },
+  ],
+  pgfplots: [
+    { option: 'compat=1.18', detail: 'Enable modern PGFPlots 1.18 axis/label placement' },
+    { option: 'compat=newest', detail: 'Use newest installed PGFPlots features' },
+  ],
+  tikz: [
+    { option: 'babel', detail: 'Protect active characters inside TikZ nodes when using babel' },
+  ],
+  listings: [
+    { option: 'final', detail: 'Render code listings in final mode' },
+    { option: 'draft', detail: 'Skip rendering listings in draft mode' },
+  ],
+  fancyhdr: [
+    { option: 'nocheck', detail: 'Suppress headheight checks' },
+  ],
+  multicol: [
+    { option: 'colaction', detail: 'Enable column-aware action hooks' },
+  ],
+};
+
+export const DOCUMENTCLASS_OPTIONS: PackageOptionSpec[] = [
+  { option: '10pt', detail: '10pt base document font size' },
+  { option: '11pt', detail: '11pt base document font size' },
+  { option: '12pt', detail: '12pt base document font size' },
+  { option: 'a4paper', detail: 'A4 paper format' },
+  { option: 'letterpaper', detail: 'US Letter paper format' },
+  { option: 'a5paper', detail: 'A5 paper format' },
+  { option: 'twocolumn', detail: 'Two-column layout' },
+  { option: 'onecolumn', detail: 'Single-column layout' },
+  { option: 'twoside', detail: 'Two-sided book/report layout' },
+  { option: 'oneside', detail: 'One-sided layout' },
+  { option: 'landscape', detail: 'Landscape page orientation' },
+  { option: 'fleqn', detail: 'Left-aligned display equations' },
+  { option: 'leqno', detail: 'Equation numbers on the left' },
+  { option: 'openright', detail: 'Start chapters on odd/right pages' },
+  { option: 'openany', detail: 'Start chapters on any page' },
+  { option: 'titlepage', detail: 'Place title/author on dedicated page' },
+  { option: 'draft', detail: 'Mark overfull boxes & placeholder images' },
+  { option: 'final', detail: 'Final production mode' },
+];
+
+export const COMMAND_OPTION_CATALOG: Record<string, PackageOptionSpec[]> = {
+  includegraphics: [
+    { option: 'width=0.8\\textwidth', detail: 'Scale graphic relative to text width' },
+    { option: 'width=\\linewidth', detail: 'Fit graphic to current line width' },
+    { option: 'height=6cm', detail: 'Set explicit graphic height' },
+    { option: 'scale=0.75', detail: 'Scale graphic proportionally' },
+    { option: 'keepaspectratio', detail: 'Preserve aspect ratio when setting width & height' },
+    { option: 'angle=90', detail: 'Rotate graphic counterclockwise in degrees' },
+    { option: 'page=1', detail: 'Select page number from multi-page PDF' },
+    { option: 'trim=0 0 0 0,clip', detail: 'Crop left bottom right top margins' },
+  ],
+  figure: [
+    { option: 'htbp', detail: 'Place here, top, bottom, or float page' },
+    { option: 'H', detail: 'Exact placement here (requires float package)' },
+    { option: '!htbp', detail: 'Force placement ignoring strict float limits' },
+    { option: 't', detail: 'Top of page' },
+    { option: 'b', detail: 'Bottom of page' },
+    { option: 'p', detail: 'Dedicated float page' },
+  ],
+  table: [
+    { option: 'htbp', detail: 'Place here, top, bottom, or float page' },
+    { option: 'H', detail: 'Exact placement here (requires float package)' },
+    { option: '!htbp', detail: 'Force placement ignoring strict float limits' },
+  ],
+  lstlisting: [
+    { option: 'language=Python', detail: 'Python syntax highlighting' },
+    { option: 'language=C++', detail: 'C++ syntax highlighting' },
+    { option: 'language=TeX', detail: 'LaTeX syntax highlighting' },
+    { option: 'basicstyle=\\ttfamily\\small', detail: 'Monospace font size & family' },
+    { option: 'breaklines=true', detail: 'Wrap long code lines automatically' },
+    { option: 'frame=single', detail: 'Draw single border box around listing' },
+    { option: 'numbers=left', detail: 'Show line numbers on the left' },
+    { option: 'caption={}', detail: 'Listing caption title' },
+    { option: 'label={lst:}', detail: 'Cross-reference label' },
+  ],
+  tcolorbox: [
+    { option: 'title={}', detail: 'Title bar text for box' },
+    { option: 'colback=blue!5!white', detail: 'Box background color' },
+    { option: 'colframe=blue!60!black', detail: 'Box border & title bar color' },
+    { option: 'breakable', detail: 'Allow box to split across page breaks' },
+    { option: 'enhanced', detail: 'Enable advanced skin styling' },
+  ],
+  draw: [
+    { option: '->', detail: 'Forward arrow tip' },
+    { option: '<->', detail: 'Double-headed arrow' },
+    { option: 'thick', detail: 'Thicker stroke width' },
+    { option: 'dashed', detail: 'Dashed stroke style' },
+    { option: 'dotted', detail: 'Dotted stroke style' },
+    { option: 'blue', detail: 'Blue stroke color' },
+    { option: 'rounded corners', detail: 'Round path vertices' },
+  ],
+};
 
 export const ENVIRONMENT_CATALOG: Array<{ name: string; pkg: string; snippet: string; detail: string }> = [
   { name: 'document', pkg: 'core', snippet: 'document}\n\n\\end{document}', detail: 'Main document body' },
@@ -172,15 +484,153 @@ export interface AutocompleteContext {
   items: LatexCompletionItem[];
 }
 
+function buildOptionSuggestions(
+  specs: Array<PackageOptionSpec & { pkgName?: string }>,
+  existingSegment: string,
+  cursorPos: number,
+  fallbackPkgLabel: string
+): AutocompleteContext | null {
+  const parts = existingSegment.split(',');
+  const rawToken = parts[parts.length - 1] ?? '';
+  const leadingSpaces = rawToken.length - rawToken.trimStart().length;
+  const query = rawToken.trim().toLowerCase();
+  const from = cursorPos - (rawToken.length - leadingSpaces);
+
+  const alreadyUsed = new Set(
+    parts
+      .slice(0, -1)
+      .map((p) => p.trim().toLowerCase().split('=')[0])
+      .filter(Boolean)
+  );
+
+  const seen = new Set<string>();
+  const items: LatexCompletionItem[] = [];
+  for (const spec of specs) {
+    const key = spec.option.toLowerCase();
+    const baseKey = key.split('=')[0];
+    if (alreadyUsed.has(baseKey) || seen.has(key)) continue;
+    if (query && !key.includes(query) && !spec.detail.toLowerCase().includes(query)) continue;
+    seen.add(key);
+    const pkgTag = spec.pkgName || fallbackPkgLabel;
+    items.push({
+      label: spec.option,
+      insertText: spec.insert || spec.option,
+      detail: spec.pkgName ? `${spec.detail} (${spec.pkgName})` : spec.detail,
+      pkg: pkgTag,
+      kind: 'option',
+    });
+  }
+  return items.length ? { from, to: cursorPos, items } : null;
+}
+
 export function getLatexSuggestions(
   doc: string,
   cursorPos: number,
   files: ProjectFile[] = []
 ): AutocompleteContext | null {
   const before = doc.slice(0, cursorPos);
+  const after = doc.slice(cursorPos);
   const usedPackages = extractUsedPackages(doc);
 
-  // 1. Inside \usepackage{...}
+  // 1a. Inside \usepackage[...]{pkg} or \usepackage[...] (package options)
+  const pkgOptMatch = before.match(/\\usepackage\[([^\[\]{}\n]*)$/);
+  if (pkgOptMatch) {
+    const afterPkgMatch = after.match(/^[^\[\]{}\n]*\]\s*\{([^}]*)\}/);
+    const targetPackages = afterPkgMatch
+      ? afterPkgMatch[1]
+          .split(',')
+          .map((s) => s.trim())
+          .filter(Boolean)
+      : [];
+
+    if (targetPackages.length > 0) {
+      const targetSpecs: Array<PackageOptionSpec & { pkgName?: string }> = [];
+      for (const pkgName of targetPackages) {
+        const pkgSpecs = PACKAGE_OPTIONS_CATALOG[pkgName] || [];
+        for (const spec of pkgSpecs) {
+          targetSpecs.push({ ...spec, pkgName });
+        }
+      }
+      if (targetSpecs.length > 0) {
+        return buildOptionSuggestions(targetSpecs, pkgOptMatch[1], cursorPos, targetPackages[0]);
+      }
+    }
+
+    // Package name not typed yet after ]: suggest options across known packages (prioritizing active packages)
+    const allSpecs: Array<PackageOptionSpec & { pkgName?: string }> = [];
+    const sortedPkgNames = Object.keys(PACKAGE_OPTIONS_CATALOG).sort((a, b) => {
+      const aUsed = usedPackages.has(a) ? 0 : 1;
+      const bUsed = usedPackages.has(b) ? 0 : 1;
+      return aUsed - bUsed || a.localeCompare(b);
+    });
+    for (const pkgName of sortedPkgNames) {
+      for (const spec of PACKAGE_OPTIONS_CATALOG[pkgName]) {
+        allSpecs.push({ ...spec, pkgName });
+      }
+    }
+    return buildOptionSuggestions(allSpecs, pkgOptMatch[1], cursorPos, 'option');
+  }
+
+  // 1b. Inside \PassOptionsToPackage{...}{pkg}
+  const passOptMatch = before.match(/\\PassOptionsToPackage\{([^{}\n]*)$/);
+  if (passOptMatch) {
+    const afterPassPkg = after.match(/^[^{}\n]*\}\s*\{([^}]*)\}/);
+    const pkgName = afterPassPkg?.[1]?.trim();
+    if (pkgName && PACKAGE_OPTIONS_CATALOG[pkgName]) {
+      return buildOptionSuggestions(
+        PACKAGE_OPTIONS_CATALOG[pkgName].map((s) => ({ ...s, pkgName })),
+        passOptMatch[1],
+        cursorPos,
+        pkgName
+      );
+    }
+  }
+
+  // 1c. Inside \documentclass[...]{...}
+  const docClassOptMatch = before.match(/\\documentclass\[([^\[\]{}\n]*)$/);
+  if (docClassOptMatch) {
+    return buildOptionSuggestions(DOCUMENTCLASS_OPTIONS, docClassOptMatch[1], cursorPos, 'documentclass');
+  }
+
+  // 1d. Inside \hypersetup{...}, \geometry{...}, \lstset{...}
+  const setupMatch = before.match(/\\(hypersetup|geometry|lstset)\{([^{}\n]*)$/);
+  if (setupMatch) {
+    const setupCmd = setupMatch[1];
+    const specs =
+      setupCmd === 'hypersetup'
+        ? PACKAGE_OPTIONS_CATALOG.hyperref
+        : setupCmd === 'geometry'
+          ? PACKAGE_OPTIONS_CATALOG.geometry
+          : COMMAND_OPTION_CATALOG.lstlisting;
+    if (specs) {
+      return buildOptionSuggestions(
+        specs.map((s) => ({ ...s, pkgName: setupCmd })),
+        setupMatch[2],
+        cursorPos,
+        setupCmd
+      );
+    }
+  }
+
+  // 1e. Inside \includegraphics[...], \draw[...], or \begin{env}[...]
+  const cmdBracketMatch = before.match(/\\(includegraphics|draw)\[([^\[\]{}\n]*)$/);
+  if (cmdBracketMatch) {
+    const cmdName = cmdBracketMatch[1];
+    const specs = COMMAND_OPTION_CATALOG[cmdName];
+    if (specs) {
+      return buildOptionSuggestions(specs, cmdBracketMatch[2], cursorPos, cmdName);
+    }
+  }
+  const envBracketMatch = before.match(/\\begin\{([a-zA-Z0-9_*]+)\}\[([^\[\]{}\n]*)$/);
+  if (envBracketMatch) {
+    const envName = envBracketMatch[1];
+    const specs = COMMAND_OPTION_CATALOG[envName];
+    if (specs) {
+      return buildOptionSuggestions(specs, envBracketMatch[2], cursorPos, envName);
+    }
+  }
+
+  // 1f. Inside \usepackage{...} (package names)
   const pkgMatch = before.match(/\\usepackage(?:\[[^\]]*\])?\{(?:[^}]*,)?([a-zA-Z0-9_-]*)$/);
   if (pkgMatch) {
     const query = pkgMatch[1].toLowerCase();

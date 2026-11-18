@@ -59,3 +59,47 @@ test('getLatexSuggestions surfaces smart snippets on \\snip and topic triggers',
   assert.equal(casesRes.items.some((it) => it.kind === 'snippet' && it.label === '\\snip:cases'), true);
 });
 
+test('getLatexSuggestions completes package options inside \\usepackage[...]{pkg} and without closing brace', () => {
+  const geomDoc = '\\usepackage[margin=1in, ]{geometry}';
+  const geomCursor = geomDoc.indexOf(']{geometry}');
+  const geomRes = getLatexSuggestions(geomDoc, geomCursor, []);
+  assert.ok(geomRes);
+  assert.equal(geomRes.items.some((it) => it.kind === 'option' && it.label === 'a4paper'), true);
+  assert.equal(geomRes.items.some((it) => it.label === 'margin=1in'), false);
+
+  const hyperDoc = '\\usepackage[color]{hyperref}';
+  const hyperCursor = hyperDoc.indexOf(']{hyperref}');
+  const hyperRes = getLatexSuggestions(hyperDoc, hyperCursor, []);
+  assert.ok(hyperRes);
+  assert.equal(hyperRes.items[0].label, 'colorlinks=true');
+  assert.equal(hyperRes.items[0].kind, 'option');
+
+  const openPkgDoc = '\\usepackage[utf8]{inputenc}\n\\usepackage[a4';
+  const openPkgRes = getLatexSuggestions(openPkgDoc, openPkgDoc.length, []);
+  assert.ok(openPkgRes);
+  assert.equal(openPkgRes.items.some((it) => it.kind === 'option' && it.label === 'a4paper'), true);
+});
+
+test('getLatexSuggestions completes \\documentclass, \\hypersetup, \\includegraphics, and environment options', () => {
+  const docClass = '\\documentclass[12';
+  const docRes = getLatexSuggestions(docClass, docClass.length, []);
+  assert.ok(docRes);
+  assert.equal(docRes.items.some((it) => it.kind === 'option' && it.label === '12pt'), true);
+
+  const hyperSetup = '\\hypersetup{linkc';
+  const setupRes = getLatexSuggestions(hyperSetup, hyperSetup.length, []);
+  assert.ok(setupRes);
+  assert.equal(setupRes.items[0].label, 'linkcolor=blue');
+
+  const imgDoc = '\\includegraphics[wid';
+  const imgRes = getLatexSuggestions(imgDoc, imgDoc.length, []);
+  assert.ok(imgRes);
+  assert.equal(imgRes.items[0].label, 'width=0.8\\textwidth');
+
+  const figDoc = '\\begin{figure}[ht';
+  const figRes = getLatexSuggestions(figDoc, figDoc.length, []);
+  assert.ok(figRes);
+  assert.equal(figRes.items[0].label, 'htbp');
+});
+
+

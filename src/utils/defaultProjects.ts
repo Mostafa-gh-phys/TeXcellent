@@ -246,6 +246,22 @@ export function createInitialProject(): LatexProject {
   };
 }
 
+export function createInitialProjects(): LatexProject[] {
+  const now = new Date().toISOString();
+  return [
+    {
+      id: 'proj-default',
+      ...PROJECT_TEMPLATES[0].project,
+      updatedAt: now,
+    },
+    {
+      id: 'proj-research-paper',
+      ...PROJECT_TEMPLATES[1].project,
+      updatedAt: now,
+    },
+  ];
+}
+
 const LEGACY_BROKEN_FONTS = `\\settextfont{Vazirmatn}\n\\setlatintextfont{Source Serif 4}`;
 const SAFE_FONT_BLOCK = `% Safe cross-platform font selection with automatic fallback
 \\IfFontExistsTF{Vazirmatn}{\\settextfont{Vazirmatn}}{%

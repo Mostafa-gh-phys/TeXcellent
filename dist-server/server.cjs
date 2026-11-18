@@ -130746,15 +130746,60 @@ async function buildPdfBinaryFromLatex(source, meta) {
       continue;
     }
     if (block.type === "figure") {
-      ensureSpace(44);
       const figLabel = block.caption || block.title || "Figure";
-      drawTextParagraph(`[Figure: ${figLabel}]`, {
-        size: 9.5,
-        align: "center",
-        rtl: Boolean(block.rtl),
-        color: (0, import_pdf_lib.rgb)(0.32, 0.36, 0.42),
-        lineHeight: 15
-      });
+      const targetName = (block.title || "").trim().replace(/^\.\//, "");
+      const matchedAsset = targetName ? meta.files?.find((f3) => {
+        if (!f3.binaryBase64) return false;
+        const norm = f3.name.replace(/\\/g, "/").replace(/^\.\//, "");
+        const base = import_node_path3.default.posix.basename(norm);
+        return norm === targetName || base === import_node_path3.default.posix.basename(targetName);
+      }) : void 0;
+      let embeddedRendered = false;
+      if (matchedAsset?.binaryBase64) {
+        try {
+          const imgBytes = Buffer.from(matchedAsset.binaryBase64, "base64");
+          const lowerName = matchedAsset.name.toLowerCase();
+          const embeddedImg = lowerName.endsWith(".png") ? await pdfDoc.embedPng(imgBytes) : lowerName.endsWith(".jpg") || lowerName.endsWith(".jpeg") ? await pdfDoc.embedJpg(imgBytes) : null;
+          if (embeddedImg) {
+            const maxImgW = Math.min(MAX_WIDTH, 380);
+            const maxImgH = 260;
+            const scale = Math.min(maxImgW / embeddedImg.width, maxImgH / embeddedImg.height, 1);
+            const drawW = embeddedImg.width * scale;
+            const drawH = embeddedImg.height * scale;
+            ensureSpace(drawH + 34);
+            const drawX = MARGIN + (MAX_WIDTH - drawW) / 2;
+            page.drawImage(embeddedImg, {
+              x: drawX,
+              y: y - drawH,
+              width: drawW,
+              height: drawH
+            });
+            y -= drawH + 10;
+            if (block.caption) {
+              drawTextParagraph(block.caption, {
+                size: 9.5,
+                align: "center",
+                rtl: Boolean(block.rtl),
+                color: (0, import_pdf_lib.rgb)(0.32, 0.36, 0.42),
+                lineHeight: 15
+              });
+            }
+            embeddedRendered = true;
+          }
+        } catch {
+          embeddedRendered = false;
+        }
+      }
+      if (!embeddedRendered) {
+        ensureSpace(44);
+        drawTextParagraph(`[Figure: ${figLabel}]`, {
+          size: 9.5,
+          align: "center",
+          rtl: Boolean(block.rtl),
+          color: (0, import_pdf_lib.rgb)(0.32, 0.36, 0.42),
+          lineHeight: 15
+        });
+      }
       y -= 8;
       continue;
     }
@@ -130964,7 +131009,11 @@ async function startServer() {
             const relSafe = sanitizeRelativeTeXPath(f3.name);
             const fullTarget = import_node_path3.default.join(tmpDir, relSafe);
             await import_promises3.default.mkdir(import_node_path3.default.dirname(fullTarget), { recursive: true });
-            await import_promises3.default.writeFile(fullTarget, f3.content, "utf8");
+            if (f3.binaryBase64) {
+              await import_promises3.default.writeFile(fullTarget, Buffer.from(f3.binaryBase64, "base64"));
+            } else {
+              await import_promises3.default.writeFile(fullTarget, f3.content, "utf8");
+            }
           }
           const safeMainRel = sanitizeRelativeTeXPath(mainFileName);
           const mainRelDir = import_node_path3.default.dirname(safeMainRel);
@@ -131174,7 +131223,8 @@ ${dotLog.slice(-4e3)}`);
         mode: effectiveBuiltinMode,
         distribution,
         edition,
-        projectName
+        projectName,
+        files
       });
       const compileId = import_node_crypto.default.randomUUID();
       const pdfFileName = import_node_path3.default.basename(mainFile.name).replace(/\.tex$/i, ".pdf");

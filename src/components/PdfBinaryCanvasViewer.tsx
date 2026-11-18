@@ -50,7 +50,7 @@ export const PdfBinaryCanvasViewer: React.FC<PdfBinaryCanvasViewerProps> = ({
       const width = entries[0]?.contentRect.width || 0;
       if (rafId !== null) cancelAnimationFrame(rafId);
       rafId = requestAnimationFrame(() => {
-        setPaneWidth((prev) => (Math.abs(prev - width) >= 12 ? width : prev));
+        setPaneWidth((prev) => (Math.abs(prev - width) >= 4 ? width : prev));
       });
     });
     observer.observe(el);
@@ -80,7 +80,10 @@ export const PdfBinaryCanvasViewer: React.FC<PdfBinaryCanvasViewerProps> = ({
         const bytes = await res.arrayBuffer();
         if (cancelled) return;
 
-        loadingTask = pdfjsLib.getDocument({ data: new Uint8Array(bytes) });
+        loadingTask = pdfjsLib.getDocument({
+          data: new Uint8Array(bytes),
+          useSystemFonts: true,
+        });
         const pdfDoc = await loadingTask.promise;
         if (cancelled) {
           await loadingTask.destroy();
@@ -89,11 +92,11 @@ export const PdfBinaryCanvasViewer: React.FC<PdfBinaryCanvasViewerProps> = ({
 
         setPageCount(pdfDoc.numPages);
         const dpr = typeof window !== 'undefined' ? window.devicePixelRatio || 1 : 1;
-        // Supersample >= 2.5x even on 1x displays so small Persian & math glyphs stay razor-sharp
-        const supersample = Math.min(3.5, Math.max(2.5, dpr * 2));
+        // Exact integer physical multiplier (3x at 1x/1.5x, 4x at 2x) keeps glyph stems grid-aligned and sharp
+        const outputScale = Math.min(4, Math.max(3, Math.round(dpr * 2)));
         const availableWidth = Math.max(
           280,
-          (scrollContainerRef.current?.clientWidth || paneWidth || 620) - 48
+          (scrollContainerRef.current?.clientWidth || paneWidth || 620) - 24
         );
 
         for (let pageNum = 1; pageNum <= pdfDoc.numPages; pageNum++) {
@@ -102,27 +105,25 @@ export const PdfBinaryCanvasViewer: React.FC<PdfBinaryCanvasViewerProps> = ({
           if (cancelled) break;
 
           const unscaled = page.getViewport({ scale: 1 });
-          const fitScale = Math.min(1.45, Math.max(0.5, availableWidth / unscaled.width));
+          const fitScale = Math.min(2.0, Math.max(0.5, availableWidth / unscaled.width));
           const displayScale = fitScale * (zoom / 100);
           const cssViewport = page.getViewport({ scale: displayScale });
-          const renderViewport = page.getViewport({ scale: displayScale * supersample });
           const canvas = document.createElement('canvas');
           const context = canvas.getContext('2d', { alpha: false });
           if (!context) continue;
 
           const cssWidth = Math.round(cssViewport.width);
           const cssHeight = Math.round(cssViewport.height);
-          canvas.width = Math.max(1, Math.round(renderViewport.width));
-          canvas.height = Math.max(1, Math.round(renderViewport.height));
+          canvas.width = Math.max(1, Math.round(cssWidth * outputScale));
+          canvas.height = Math.max(1, Math.round(cssHeight * outputScale));
           canvas.style.width = `${cssWidth}px`;
           canvas.style.height = `${cssHeight}px`;
-          canvas.dataset.supersample = supersample.toFixed(2);
+          canvas.style.setProperty('image-rendering', 'high-quality');
+          canvas.dataset.supersample = outputScale.toFixed(2);
           canvas.dataset.testid = 'pdf-page-canvas';
           canvas.className = 'mx-auto bg-white shadow-sm border border-neutral-200 block';
           canvas.setAttribute('aria-label', `PDF page ${pageNum}`);
 
-          context.imageSmoothingEnabled = true;
-          context.imageSmoothingQuality = 'high';
           context.fillStyle = '#ffffff';
           context.fillRect(0, 0, canvas.width, canvas.height);
 
@@ -133,7 +134,9 @@ export const PdfBinaryCanvasViewer: React.FC<PdfBinaryCanvasViewerProps> = ({
           await page.render({
             canvasContext: context,
             canvas,
-            viewport: renderViewport,
+            viewport: cssViewport,
+            transform: [outputScale, 0, 0, outputScale, 0, 0],
+            intent: 'display',
           }).promise;
         }
       } catch (err) {
@@ -158,7 +161,7 @@ export const PdfBinaryCanvasViewer: React.FC<PdfBinaryCanvasViewerProps> = ({
   }, [pdfUrl, zoom, paneWidth]);
 
   return (
-    <div ref={scrollContainerRef} className="flex-1 overflow-auto p-4 sm:p-6 relative">
+    <div ref={scrollContainerRef} className="flex-1 overflow-auto p-2.5 sm:p-3 relative">
       {loading && (
         <div
           className="flex items-center justify-center gap-2 py-8 text-xs"

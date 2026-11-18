@@ -308,6 +308,7 @@ export const LatexCodeEditor: React.FC<LatexCodeEditorProps> = ({
       return {
         from: res.from,
         to: res.to,
+        validFor: /^[\\a-zA-Z0-9_:=.!@-]*$/,
         options: res.items.map((item) => ({
           label: item.label,
           detail: item.detail,
@@ -316,9 +317,11 @@ export const LatexCodeEditor: React.FC<LatexCodeEditorProps> = ({
               ? 'class'
               : item.kind === 'package'
                 ? 'namespace'
-                : item.kind === 'snippet'
-                  ? 'keyword'
-                  : 'function',
+                : item.kind === 'option'
+                  ? 'property'
+                  : item.kind === 'snippet'
+                    ? 'keyword'
+                    : 'function',
           apply: (view, _completion, from, to) => {
             const insert = item.insertText;
             const bracePos = item.kind === 'snippet' ? -1 : insert.indexOf('{}');
@@ -367,13 +370,25 @@ export const LatexCodeEditor: React.FC<LatexCodeEditorProps> = ({
             const nextDoc = update.state.doc.toString();
             latestProps.current.onChange(nextDoc);
 
+            let typedTriggerChar = false;
             update.changes.iterChanges((_fromA, _toA, _fromB, _toB, inserted) => {
               const insertedText = inserted.toString();
+              if (insertedText === '[' || insertedText === ',' || insertedText === '{' || insertedText === '\\') {
+                typedTriggerChar = true;
+              }
               const script = detectInputScript(insertedText);
               if (script) {
                 latestProps.current.onScriptDetected?.(script);
               }
             });
+
+            // CodeMirror only auto-opens on word chars; trigger immediately for [, {, ,, \ contexts
+            if (typedTriggerChar) {
+              const head = update.state.selection.main.head;
+              if (getLatexSuggestions(nextDoc, head, latestProps.current.files)) {
+                requestAnimationFrame(() => startCompletion(update.view));
+              }
+            }
           }
 
           if (update.selectionSet || update.docChanged) {

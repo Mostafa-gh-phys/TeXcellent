@@ -29,7 +29,12 @@ export function inferFileLanguage(filePath: string): ProjectFile['language'] {
   const lower = filePath.toLowerCase();
   if (lower.endsWith('.bib')) return 'bibtex';
   if (lower.endsWith('.sty') || lower.endsWith('.cls')) return 'style';
+  if (/\.(png|jpe?g|gif|webp|svg|pdf|eps)$/i.test(lower)) return 'asset';
   return 'latex';
+}
+
+export function isImageAssetFile(fileName: string): boolean {
+  return /\.(png|jpe?g|gif|webp|svg)$/i.test(fileName);
 }
 
 export function stripSharedRootFolder(paths: string[]): string[] {

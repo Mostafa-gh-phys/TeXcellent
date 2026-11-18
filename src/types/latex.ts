@@ -58,7 +58,9 @@ export interface ProjectFile {
   id: string;
   name: string;
   content: string;
-  language: 'latex' | 'bibtex' | 'style';
+  language: 'latex' | 'bibtex' | 'style' | 'asset';
+  binaryBase64?: string;
+  mimeType?: string;
   updatedAt: string;
 }
 

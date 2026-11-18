@@ -283,7 +283,13 @@ async function detectLocalTexInstallation(customDir?: string): Promise<DetectedT
 
 async function buildPdfBinaryFromLatex(
   source: string,
-  meta: { mode: CompilerMode; distribution: TexDistribution; edition: TexEdition; projectName: string }
+  meta: {
+    mode: CompilerMode;
+    distribution: TexDistribution;
+    edition: TexEdition;
+    projectName: string;
+    files?: ProjectFile[];
+  }
 ): Promise<{ buffer: Buffer; pageCount: number }> {
   const parsed = parseLatexDocument(source);
   const pdfDoc = await PDFDocument.create();
@@ -636,15 +642,66 @@ async function buildPdfBinaryFromLatex(
       continue;
     }
     if (block.type === 'figure') {
-      ensureSpace(44);
       const figLabel = block.caption || block.title || 'Figure';
-      drawTextParagraph(`[Figure: ${figLabel}]`, {
-        size: 9.5,
-        align: 'center',
-        rtl: Boolean(block.rtl),
-        color: rgb(0.32, 0.36, 0.42),
-        lineHeight: 15,
-      });
+      const targetName = (block.title || '').trim().replace(/^\.\//, '');
+      const matchedAsset = targetName
+        ? meta.files?.find((f) => {
+            if (!f.binaryBase64) return false;
+            const norm = f.name.replace(/\\/g, '/').replace(/^\.\//, '');
+            const base = path.posix.basename(norm);
+            return norm === targetName || base === path.posix.basename(targetName);
+          })
+        : undefined;
+      let embeddedRendered = false;
+      if (matchedAsset?.binaryBase64) {
+        try {
+          const imgBytes = Buffer.from(matchedAsset.binaryBase64, 'base64');
+          const lowerName = matchedAsset.name.toLowerCase();
+          const embeddedImg = lowerName.endsWith('.png')
+            ? await pdfDoc.embedPng(imgBytes)
+            : lowerName.endsWith('.jpg') || lowerName.endsWith('.jpeg')
+              ? await pdfDoc.embedJpg(imgBytes)
+              : null;
+          if (embeddedImg) {
+            const maxImgW = Math.min(MAX_WIDTH, 380);
+            const maxImgH = 260;
+            const scale = Math.min(maxImgW / embeddedImg.width, maxImgH / embeddedImg.height, 1);
+            const drawW = embeddedImg.width * scale;
+            const drawH = embeddedImg.height * scale;
+            ensureSpace(drawH + 34);
+            const drawX = MARGIN + (MAX_WIDTH - drawW) / 2;
+            page.drawImage(embeddedImg, {
+              x: drawX,
+              y: y - drawH,
+              width: drawW,
+              height: drawH,
+            });
+            y -= drawH + 10;
+            if (block.caption) {
+              drawTextParagraph(block.caption, {
+                size: 9.5,
+                align: 'center',
+                rtl: Boolean(block.rtl),
+                color: rgb(0.32, 0.36, 0.42),
+                lineHeight: 15,
+              });
+            }
+            embeddedRendered = true;
+          }
+        } catch {
+          embeddedRendered = false;
+        }
+      }
+      if (!embeddedRendered) {
+        ensureSpace(44);
+        drawTextParagraph(`[Figure: ${figLabel}]`, {
+          size: 9.5,
+          align: 'center',
+          rtl: Boolean(block.rtl),
+          color: rgb(0.32, 0.36, 0.42),
+          lineHeight: 15,
+        });
+      }
       y -= 8;
       continue;
     }
@@ -916,7 +973,11 @@ async function startServer() {
             const relSafe = sanitizeRelativeTeXPath(f.name);
             const fullTarget = path.join(tmpDir, relSafe);
             await fs.mkdir(path.dirname(fullTarget), { recursive: true });
-            await fs.writeFile(fullTarget, f.content, 'utf8');
+            if (f.binaryBase64) {
+              await fs.writeFile(fullTarget, Buffer.from(f.binaryBase64, 'base64'));
+            } else {
+              await fs.writeFile(fullTarget, f.content, 'utf8');
+            }
           }
 
           const safeMainRel = sanitizeRelativeTeXPath(mainFileName);
@@ -1167,6 +1228,7 @@ async function startServer() {
         distribution,
         edition,
         projectName,
+        files,
       });
 
       const compileId = crypto.randomUUID();

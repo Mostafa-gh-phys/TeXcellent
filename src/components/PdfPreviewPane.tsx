@@ -91,7 +91,7 @@ export const PdfPreviewPane: React.FC<PdfPreviewPaneProps> = ({
           <button
             type="button"
             aria-label="Zoom out preview"
-            onClick={() => setZoom((z) => Math.max(70, z - 10))}
+            onClick={() => setZoom((z) => Math.max(60, z - 10))}
             className="p-1.5 rounded hover:opacity-80 transition-opacity"
             style={{ color: theme.ui.textMuted }}
           >
@@ -106,7 +106,7 @@ export const PdfPreviewPane: React.FC<PdfPreviewPaneProps> = ({
           <button
             type="button"
             aria-label="Zoom in preview"
-            onClick={() => setZoom((z) => Math.min(150, z + 10))}
+            onClick={() => setZoom((z) => Math.min(250, z + 10))}
             className="p-1.5 rounded hover:opacity-80 transition-opacity"
             style={{ color: theme.ui.textMuted }}
           >

@@ -4,6 +4,7 @@ import {
   buildFileTree,
   collectFolderPaths,
   inferFileLanguage,
+  isImageAssetFile,
   normalizeProjectFilePath,
   stripSharedRootFolder,
 } from './fileTree';
@@ -28,16 +29,19 @@ test('buildFileTree creates sorted folder hierarchy with folders before files', 
     { id: '2', name: 'chapters/intro.tex', content: '', language: 'latex', updatedAt: '' },
     { id: '3', name: 'chapters/appendix/proofs.tex', content: '', language: 'latex', updatedAt: '' },
     { id: '4', name: 'main.tex', content: '', language: 'latex', updatedAt: '' },
+    { id: '5', name: 'plot.png', content: '', language: 'asset', binaryBase64: 'AAAA', updatedAt: '' },
   ];
 
   const tree = buildFileTree(files);
-  assert.equal(tree.length, 3);
+  assert.equal(tree.length, 4);
   assert.equal(tree[0].kind, 'folder');
   assert.equal(tree[0].name, 'chapters');
   assert.equal(tree[1].kind, 'file');
   assert.equal(tree[1].name, 'main.tex');
   assert.equal(tree[2].kind, 'file');
-  assert.equal(tree[2].name, 'references.bib');
+  assert.equal(tree[2].name, 'plot.png');
+  assert.equal(tree[3].kind, 'file');
+  assert.equal(tree[3].name, 'references.bib');
 
   if (tree[0].kind === 'folder') {
     assert.equal(tree[0].children[0].kind, 'folder');
@@ -50,4 +54,8 @@ test('buildFileTree creates sorted folder hierarchy with folders before files', 
   assert.equal(inferFileLanguage('preamble.sty'), 'style');
   assert.equal(inferFileLanguage('refs.bib'), 'bibtex');
   assert.equal(inferFileLanguage('ch1.tex'), 'latex');
+  assert.equal(inferFileLanguage('plot.png'), 'asset');
+  assert.equal(isImageAssetFile('plot.png'), true);
+  assert.equal(isImageAssetFile('figure.SVG'), true);
+  assert.equal(isImageAssetFile('paper.pdf'), false);
 });
