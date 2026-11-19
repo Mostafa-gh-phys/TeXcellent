@@ -1,18 +1,23 @@
 import React, { useRef, useState } from 'react';
 import JSZip from 'jszip';
 import {
-  X,
   FilePlus2,
   FolderOpen,
   Download,
   Archive,
   FileText,
   Sparkles,
+  FolderOutput,
+  BookTemplate,
+  Save,
 } from 'lucide-react';
 import { EditorTheme } from '../utils/themes';
 import { PROJECT_TEMPLATES, ProjectTemplate } from '../utils/defaultProjects';
 import { LatexProject, ProjectFile } from '../types/latex';
 import { markdownToLatex } from '../utils/latexMarkdown';
+import { ModalShell } from './ModalShell';
+
+type FileModalTab = 'workspace' | 'templates';
 
 interface FileModalProps {
   isOpen: boolean;
@@ -20,6 +25,9 @@ interface FileModalProps {
   theme: EditorTheme;
   project: LatexProject;
   activeFile: ProjectFile | undefined;
+  activeFileDirty?: boolean;
+  bundleDownloadUrl?: string;
+  onSaveActiveFile?: () => Promise<boolean> | void;
   onCreateFile: (name: string, content?: string) => void;
   onNewBlankProject: (projectName: string) => void;
   onSelectTemplate: (tpl: ProjectTemplate) => void;
@@ -32,19 +40,21 @@ export const FileModal: React.FC<FileModalProps> = ({
   theme,
   project,
   activeFile,
+  activeFileDirty = false,
+  bundleDownloadUrl,
+  onSaveActiveFile,
   onCreateFile,
   onNewBlankProject,
   onSelectTemplate,
   onImportFiles,
 }) => {
+  const [activeTab, setActiveTab] = useState<FileModalTab>('workspace');
   const [newFileName, setNewFileName] = useState('');
   const [newFileExt, setNewFileExt] = useState<'.tex' | '.bib' | '.sty' | '.cls'>('.tex');
   const [newProjectTitle, setNewProjectTitle] = useState('');
   const [feedback, setFeedback] = useState('');
   const openInputRef = useRef<HTMLInputElement | null>(null);
   const openFolderRef = useRef<HTMLInputElement | null>(null);
-
-  if (!isOpen) return null;
 
   const handleCreateNewFile = (e: React.FormEvent) => {
     e.preventDefault();
@@ -90,7 +100,6 @@ export const FileModal: React.FC<FileModalProps> = ({
     if (!fileList || fileList.length === 0) return;
     const imported: ProjectFile[] = [];
 
-    // Collect webkitRelativePath if opened as a folder so we can strip shared top-level directory
     const rawList = Array.from(fileList);
     const relPaths = rawList.map((f) => {
       const rel = (f as File & { webkitRelativePath?: string }).webkitRelativePath;
@@ -199,8 +208,15 @@ export const FileModal: React.FC<FileModalProps> = ({
     }
   };
 
-  const handleSaveCurrentFile = () => {
+  const handleSaveCurrentFile = async () => {
     if (!activeFile) return;
+    if (onSaveActiveFile) {
+      const saved = await onSaveActiveFile();
+      if (saved !== false) {
+        setFeedback(`Saved ${activeFile.name} to disk.`);
+      }
+      return;
+    }
     const blob = new Blob([activeFile.content], { type: 'text/plain;charset=utf-8' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
@@ -214,7 +230,11 @@ export const FileModal: React.FC<FileModalProps> = ({
   const handleSaveProjectZip = async () => {
     const zip = new JSZip();
     for (const f of project.files) {
-      zip.file(f.name, f.content);
+      if (f.language === 'asset' && f.binaryBase64) {
+        zip.file(f.name, f.binaryBase64, { base64: true });
+      } else {
+        zip.file(f.name, f.content);
+      }
     }
     const blob = await zip.generateAsync({ type: 'blob' });
     const url = URL.createObjectURL(blob);
@@ -228,57 +248,182 @@ export const FileModal: React.FC<FileModalProps> = ({
   };
 
   return (
-    <div
-      role="dialog"
-      aria-modal="true"
-      aria-label="File and Project Templates"
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4"
-    >
-      <div
-        className="w-full max-w-2xl rounded-xl border shadow-2xl overflow-hidden flex flex-col max-h-[90vh]"
-        style={{
-          backgroundColor: theme.ui.bg,
-          borderColor: theme.ui.border,
-          color: theme.ui.text,
-        }}
-      >
-        <div
-          className="flex items-center justify-between px-5 py-3.5 border-b"
-          style={{ borderColor: theme.ui.border, backgroundColor: theme.ui.surface }}
-        >
-          <div>
-            <h2 className="text-base font-semibold">File, Save &amp; Templates</h2>
-            <p className="text-xs" style={{ color: theme.ui.textMuted }}>
-              Create new files, open local .tex/.md/.zip files, save documents, or start from a template
-            </p>
-          </div>
+    <ModalShell<FileModalTab>
+      isOpen={isOpen}
+      onClose={onClose}
+      theme={theme}
+      ariaLabel="File and Project Templates"
+      title="File, Save & Templates"
+      subtitle={`Active project: ${project.name} (${project.files.length} files)`}
+      icon={<FileText className="w-4 h-4" />}
+      maxWidthClass="max-w-2xl"
+      tabs={[
+        { id: 'workspace', label: 'Workspace & Save', icon: <Save className="w-3.5 h-3.5" /> },
+        {
+          id: 'templates',
+          label: 'Templates',
+          icon: <BookTemplate className="w-3.5 h-3.5" />,
+          badge: PROJECT_TEMPLATES.length,
+        },
+      ]}
+      activeTab={activeTab}
+      onTabChange={setActiveTab}
+      footer={
+        <>
+          <span className="text-[11px]" style={{ color: theme.ui.textMuted }}>
+            {activeFile
+              ? `${activeFile.name}${activeFileDirty ? ' · Unsaved changes' : ' · Synced'}`
+              : 'Auto-saves locally in browser storage'}
+          </span>
           <button
             type="button"
-            aria-label="Close file modal"
             onClick={onClose}
-            className="p-1.5 rounded-md hover:opacity-75"
-            style={{ color: theme.ui.textMuted }}
+            className="px-3.5 py-1.5 text-xs font-semibold rounded-md"
+            style={{ backgroundColor: theme.ui.accent, color: theme.ui.accentFg }}
           >
-            <X className="w-4 h-4" />
+            Done
           </button>
+        </>
+      }
+    >
+      {feedback && (
+        <div
+          className="p-2.5 rounded-lg border text-xs"
+          style={{
+            backgroundColor: theme.ui.surface,
+            borderColor: theme.ui.accent,
+            color: theme.ui.text,
+          }}
+        >
+          {feedback}
         </div>
+      )}
 
-        <div className="p-5 overflow-y-auto space-y-5">
-          {feedback && (
+      {activeTab === 'workspace' ? (
+        <div className="space-y-4">
+          {/* Local Open & Save Actions */}
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <div
-              className="p-2.5 rounded-lg border text-xs"
-              style={{
-                backgroundColor: theme.ui.surface,
-                borderColor: theme.ui.accent,
-                color: theme.ui.text,
-              }}
+              className="p-3.5 rounded-lg border space-y-2.5"
+              style={{ backgroundColor: theme.ui.surface, borderColor: theme.ui.border }}
             >
-              {feedback}
+              <div className="text-xs font-semibold">Open from Disk</div>
+              <div className="grid grid-cols-2 gap-2">
+                <button
+                  type="button"
+                  onClick={() => openInputRef.current?.click()}
+                  className="flex items-center justify-center gap-1.5 px-3 py-2 text-xs font-medium rounded-md border whitespace-nowrap"
+                  style={{
+                    backgroundColor: theme.ui.bg,
+                    borderColor: theme.ui.border,
+                    color: theme.ui.text,
+                  }}
+                >
+                  <FolderOpen className="w-3.5 h-3.5" style={{ color: theme.ui.accent }} />
+                  Open Files
+                </button>
+                <button
+                  type="button"
+                  onClick={() => openFolderRef.current?.click()}
+                  className="flex items-center justify-center gap-1.5 px-3 py-2 text-xs font-medium rounded-md border whitespace-nowrap"
+                  style={{
+                    backgroundColor: theme.ui.bg,
+                    borderColor: theme.ui.border,
+                    color: theme.ui.text,
+                  }}
+                >
+                  <FolderOpen className="w-3.5 h-3.5" style={{ color: theme.ui.accent }} />
+                  Open Folder
+                </button>
+              </div>
+              <p className="text-[11px]" style={{ color: theme.ui.textMuted }}>
+                Supports .tex, .bib, .sty, .md, images, and .zip archives.
+              </p>
+              <input
+                ref={openInputRef}
+                type="file"
+                multiple
+                accept=".tex,.bib,.sty,.cls,.bst,.clo,.def,.cfg,.ltx,.md,.zip,.png,.jpg,.jpeg,.gif,.webp,.svg,.pdf,.eps"
+                className="hidden"
+                onChange={(e) => handleOpenFiles(e.target.files)}
+              />
+              <input
+                ref={openFolderRef}
+                type="file"
+                multiple
+                {...({ webkitdirectory: '', directory: '' } as React.InputHTMLAttributes<HTMLInputElement>)}
+                className="hidden"
+                onChange={(e) => handleOpenFiles(e.target.files)}
+              />
             </div>
-          )}
+
+            <div
+              className="p-3.5 rounded-lg border space-y-2.5"
+              style={{ backgroundColor: theme.ui.surface, borderColor: theme.ui.border }}
+            >
+              <div className="flex items-center justify-between gap-2">
+                <span className="text-xs font-semibold">Save &amp; Export</span>
+                {activeFileDirty && (
+                  <span
+                    className="text-[10px] font-semibold px-1.5 py-0.5 rounded"
+                    style={{ backgroundColor: theme.ui.surfaceAlt, color: theme.ui.accent }}
+                  >
+                    Unsaved
+                  </span>
+                )}
+              </div>
+              <div className="grid grid-cols-2 gap-2">
+                <button
+                  type="button"
+                  onClick={handleSaveCurrentFile}
+                  disabled={!activeFile}
+                  className="flex items-center justify-center gap-1.5 px-3 py-2 text-xs font-semibold rounded-md whitespace-nowrap disabled:opacity-50"
+                  style={{
+                    backgroundColor: theme.ui.accent,
+                    color: theme.ui.accentFg,
+                  }}
+                >
+                  <Download className="w-3.5 h-3.5" />
+                  Save File
+                </button>
+                <button
+                  type="button"
+                  onClick={handleSaveProjectZip}
+                  className="flex items-center justify-center gap-1.5 px-3 py-2 text-xs font-medium rounded-md border whitespace-nowrap"
+                  style={{
+                    backgroundColor: theme.ui.bg,
+                    borderColor: theme.ui.border,
+                    color: theme.ui.text,
+                  }}
+                >
+                  <Archive className="w-3.5 h-3.5" style={{ color: theme.ui.accent }} />
+                  Project .zip
+                </button>
+              </div>
+              {bundleDownloadUrl ? (
+                <a
+                  href={bundleDownloadUrl}
+                  download="compile-outputs.zip"
+                  className="w-full inline-flex items-center justify-center gap-1.5 px-2.5 py-1.5 text-[11px] font-medium rounded-md border hover:opacity-85"
+                  style={{
+                    backgroundColor: theme.ui.bg,
+                    borderColor: theme.ui.border,
+                    color: theme.ui.text,
+                  }}
+                >
+                  <FolderOutput className="w-3.5 h-3.5" style={{ color: theme.ui.accent }} />
+                  Save Compiled Outputs (.pdf, .aux, .log)
+                </a>
+              ) : (
+                <p className="text-[11px]" style={{ color: theme.ui.textMuted }}>
+                  Press Ctrl+S / Cmd+S anytime to save the active file.
+                </p>
+              )}
+            </div>
+          </div>
 
           {/* New File & New Blank Project */}
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <form
               onSubmit={handleCreateNewFile}
               className="p-3.5 rounded-lg border space-y-2.5"
@@ -321,8 +466,12 @@ export const FileModal: React.FC<FileModalProps> = ({
               </div>
               <button
                 type="submit"
-                className="w-full py-1.5 text-xs font-semibold rounded-md"
-                style={{ backgroundColor: theme.ui.accent, color: theme.ui.accentFg }}
+                className="w-full py-1.5 text-xs font-medium rounded-md border"
+                style={{
+                  backgroundColor: theme.ui.bg,
+                  borderColor: theme.ui.border,
+                  color: theme.ui.text,
+                }}
               >
                 Create File
               </button>
@@ -363,121 +512,39 @@ export const FileModal: React.FC<FileModalProps> = ({
               </button>
             </form>
           </div>
-
-          {/* Open File / Folder & Save Controls */}
-          <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5">
-            <button
-              type="button"
-              onClick={() => openInputRef.current?.click()}
-              className="flex items-center justify-center gap-2 px-3 py-2.5 text-xs font-medium rounded-lg border whitespace-nowrap"
-              style={{
-                backgroundColor: theme.ui.surface,
-                borderColor: theme.ui.border,
-                color: theme.ui.text,
-              }}
-            >
-              <FolderOpen className="w-4 h-4" style={{ color: theme.ui.accent }} />
-              Open Files
-            </button>
-            <input
-              ref={openInputRef}
-              type="file"
-              multiple
-              accept=".tex,.bib,.sty,.cls,.bst,.clo,.def,.cfg,.ltx,.md,.zip,.png,.jpg,.jpeg,.gif,.webp,.svg,.pdf,.eps"
-              className="hidden"
-              onChange={(e) => handleOpenFiles(e.target.files)}
-            />
-
-            <button
-              type="button"
-              onClick={() => openFolderRef.current?.click()}
-              className="flex items-center justify-center gap-2 px-3 py-2.5 text-xs font-medium rounded-lg border whitespace-nowrap"
-              style={{
-                backgroundColor: theme.ui.surface,
-                borderColor: theme.ui.border,
-                color: theme.ui.text,
-              }}
-            >
-              <FolderOpen className="w-4 h-4" style={{ color: theme.ui.accent }} />
-              Open Folder
-            </button>
-            <input
-              ref={openFolderRef}
-              type="file"
-              multiple
-              {...({ webkitdirectory: '', directory: '' } as React.InputHTMLAttributes<HTMLInputElement>)}
-              className="hidden"
-              onChange={(e) => handleOpenFiles(e.target.files)}
-            />
-
-            <button
-              type="button"
-              onClick={handleSaveCurrentFile}
-              disabled={!activeFile}
-              className="flex items-center justify-center gap-2 px-3 py-2.5 text-xs font-medium rounded-lg border whitespace-nowrap disabled:opacity-50"
-              style={{
-                backgroundColor: theme.ui.surface,
-                borderColor: theme.ui.border,
-                color: theme.ui.text,
-              }}
-            >
-              <Download className="w-4 h-4" style={{ color: theme.ui.accent }} />
-              Save File
-            </button>
-
-            <button
-              type="button"
-              onClick={handleSaveProjectZip}
-              className="flex items-center justify-center gap-2 px-3 py-2.5 text-xs font-medium rounded-lg border whitespace-nowrap"
-              style={{
-                backgroundColor: theme.ui.surface,
-                borderColor: theme.ui.border,
-                color: theme.ui.text,
-              }}
-            >
-              <Archive className="w-4 h-4" style={{ color: theme.ui.accent }} />
-              Save .zip
-            </button>
-          </div>
-
-          {/* Curated Templates */}
-          <div className="space-y-2.5 pt-2 border-t" style={{ borderColor: theme.ui.border }}>
-            <div className="flex items-center justify-between">
-              <h3 className="text-xs font-semibold" style={{ color: theme.ui.textMuted }}>
-                Project Templates
-              </h3>
-              <span className="text-[11px]" style={{ color: theme.ui.textMuted }}>
-                Active project auto-saves locally
-              </span>
-            </div>
-            <div className="space-y-2">
-              {PROJECT_TEMPLATES.map((tpl) => (
-                <button
-                  key={tpl.id}
-                  type="button"
-                  onClick={() => {
-                    onSelectTemplate(tpl);
-                    onClose();
-                  }}
-                  className="w-full text-left p-3.5 rounded-lg border transition-colors hover:opacity-90 flex items-start justify-between gap-3"
-                  style={{
-                    backgroundColor: theme.ui.surface,
-                    borderColor: theme.ui.border,
-                  }}
-                >
-                  <div>
-                    <div className="text-sm font-semibold">{tpl.name}</div>
-                    <div className="text-xs mt-0.5" style={{ color: theme.ui.textMuted }}>
-                      {tpl.subtitle}
-                    </div>
+        </div>
+      ) : (
+        <div className="space-y-2.5">
+          <p className="text-xs" style={{ color: theme.ui.textMuted }}>
+            Create a new project folder from a ready-to-compile bilingual or academic starter template.
+          </p>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+            {PROJECT_TEMPLATES.map((tpl) => (
+              <button
+                key={tpl.id}
+                type="button"
+                onClick={() => {
+                  onSelectTemplate(tpl);
+                  onClose();
+                }}
+                className="text-left p-3.5 rounded-lg border transition-colors hover:opacity-90 flex items-start justify-between gap-3"
+                style={{
+                  backgroundColor: theme.ui.surface,
+                  borderColor: theme.ui.border,
+                }}
+              >
+                <div className="min-w-0">
+                  <div className="text-xs font-semibold truncate">{tpl.name}</div>
+                  <div className="text-[11px] mt-1 leading-relaxed" style={{ color: theme.ui.textMuted }}>
+                    {tpl.subtitle}
                   </div>
-                  <FileText className="w-4 h-4 shrink-0 mt-0.5" style={{ color: theme.ui.accent }} />
-                </button>
-              ))}
-            </div>
+                </div>
+                <FileText className="w-4 h-4 shrink-0 mt-0.5" style={{ color: theme.ui.accent }} />
+              </button>
+            ))}
           </div>
         </div>
-      </div>
-    </div>
+      )}
+    </ModalShell>
   );
 };

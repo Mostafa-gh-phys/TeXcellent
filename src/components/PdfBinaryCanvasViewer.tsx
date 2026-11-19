@@ -1,32 +1,19 @@
 import React, { useEffect, useRef, useState } from 'react';
 import * as pdfjsLib from 'pdfjs-dist/legacy/build/pdf.mjs';
 import pdfWorkerUrl from 'pdfjs-dist/legacy/build/pdf.worker.min.mjs?url';
-import { Loader2, AlertTriangle, Download } from 'lucide-react';
+import { Loader2, AlertTriangle, Download, Eye } from 'lucide-react';
 import { EditorTheme } from '../utils/themes';
+import { createPolyfilledWorkerSrc, installMainThreadPdfPolyfills } from '../utils/pdfWorkerSetup';
 
-// Defensive polyfill for Chromium < 140 / Electron 34 main-thread Uint8Array.prototype.toHex
-const proto = Uint8Array.prototype as Uint8Array & { toHex?: () => string };
-if (typeof proto.toHex !== 'function') {
-  Object.defineProperty(Uint8Array.prototype, 'toHex', {
-    configurable: true,
-    writable: true,
-    value: function toHex(this: Uint8Array): string {
-      let hex = '';
-      for (let i = 0; i < this.length; i++) {
-        hex += this[i].toString(16).padStart(2, '0');
-      }
-      return hex;
-    },
-  });
-}
-
-pdfjsLib.GlobalWorkerOptions.workerSrc = pdfWorkerUrl;
+installMainThreadPdfPolyfills();
+pdfjsLib.GlobalWorkerOptions.workerSrc = createPolyfilledWorkerSrc(pdfWorkerUrl);
 
 interface PdfBinaryCanvasViewerProps {
   pdfUrl: string;
   zoom: number;
   theme: EditorTheme;
   downloadFilename?: string;
+  onSwitchToNative?: () => void;
 }
 
 export const PdfBinaryCanvasViewer: React.FC<PdfBinaryCanvasViewerProps> = ({
@@ -34,6 +21,7 @@ export const PdfBinaryCanvasViewer: React.FC<PdfBinaryCanvasViewerProps> = ({
   zoom,
   theme,
   downloadFilename = 'document.pdf',
+  onSwitchToNative,
 }) => {
   const outerWrapperRef = useRef<HTMLDivElement | null>(null);
   const scrollContainerRef = useRef<HTMLDivElement | null>(null);
@@ -65,8 +53,8 @@ export const PdfBinaryCanvasViewer: React.FC<PdfBinaryCanvasViewerProps> = ({
       if (width <= 0) return;
       if (timer) clearTimeout(timer);
       timer = setTimeout(() => {
-        const baseline = lastRenderedWidthRef.current || width;
-        if (Math.abs(baseline - width) >= 12) {
+        const baseline = lastRenderedWidthRef.current;
+        if (baseline === 0 || Math.abs(baseline - width) >= 12) {
           setPaneWidth(width);
         }
       }, 140);
@@ -106,7 +94,8 @@ export const PdfBinaryCanvasViewer: React.FC<PdfBinaryCanvasViewerProps> = ({
           if (loadedDocRef.current) {
             const old = loadedDocRef.current;
             loadedDocRef.current = null;
-            old.loadingTask.destroy().catch(() => {});
+            await old.loadingTask.destroy().catch(() => {});
+            if (renderSeqRef.current !== mySeq) return;
           }
 
           const res = await fetch(pdfUrl, { cache: 'no-store' });
@@ -118,7 +107,12 @@ export const PdfBinaryCanvasViewer: React.FC<PdfBinaryCanvasViewerProps> = ({
 
           const loadingTask = pdfjsLib.getDocument({
             data: new Uint8Array(bytes),
+            cMapUrl: '/pdfjs/cmaps/',
+            cMapPacked: true,
+            standardFontDataUrl: '/pdfjs/standard_fonts/',
+            wasmUrl: '/pdfjs/wasm/',
             useSystemFonts: true,
+            verbosity: pdfjsLib.VerbosityLevel.ERRORS,
           });
           pdfDoc = await loadingTask.promise;
           if (renderSeqRef.current !== mySeq) {
@@ -132,8 +126,7 @@ export const PdfBinaryCanvasViewer: React.FC<PdfBinaryCanvasViewerProps> = ({
         setPageCount(pdfDoc.numPages);
 
         const dpr = typeof window !== 'undefined' ? window.devicePixelRatio || 1 : 1;
-        // Exact integer physical multiplier (3x at 1x/1.5x, 4x at 2x) keeps glyph stems grid-aligned and sharp
-        const outputScale = Math.min(4, Math.max(3, Math.round(dpr * 2)));
+        const desiredOutputScale = Math.min(4, Math.max(3, Math.round(dpr * 2)));
         const measuredOuterWidth =
           outerWrapperRef.current?.clientWidth ||
           scrollContainerRef.current?.clientWidth ||
@@ -154,12 +147,25 @@ export const PdfBinaryCanvasViewer: React.FC<PdfBinaryCanvasViewerProps> = ({
           const displayScale = fitScale * (zoom / 100);
           const cssViewport = page.getViewport({ scale: displayScale });
 
+          const cssWidth = Math.max(1, Math.round(cssViewport.width));
+          const cssHeight = Math.max(1, Math.round(cssViewport.height));
+
+          // Guard against Chromium canvas memory limits at extreme zoom levels
+          const maxDimension = 4096;
+          const maxPixels = 16_000_000;
+          let outputScale = desiredOutputScale;
+          if (cssWidth * outputScale > maxDimension || cssHeight * outputScale > maxDimension) {
+            outputScale = Math.min(outputScale, maxDimension / Math.max(cssWidth, cssHeight));
+          }
+          if (cssWidth * cssHeight * outputScale * outputScale > maxPixels) {
+            outputScale = Math.min(outputScale, Math.sqrt(maxPixels / (cssWidth * cssHeight)));
+          }
+          outputScale = Math.max(1, Number(outputScale.toFixed(2)));
+
           const canvas = document.createElement('canvas');
           const context = canvas.getContext('2d', { alpha: false });
           if (!context) continue;
 
-          const cssWidth = Math.max(1, Math.round(cssViewport.width));
-          const cssHeight = Math.max(1, Math.round(cssViewport.height));
           canvas.width = Math.max(1, Math.round(cssWidth * outputScale));
           canvas.height = Math.max(1, Math.round(cssHeight * outputScale));
           canvas.style.width = `${cssWidth}px`;
@@ -195,7 +201,6 @@ export const PdfBinaryCanvasViewer: React.FC<PdfBinaryCanvasViewerProps> = ({
           setHasPages(nextCanvases.length > 0);
         }
       } catch (err) {
-        // Ignore intentional cancellation when a newer zoom/url render supersedes this one
         const isCancel =
           err instanceof Error &&
           (err.name === 'RenderingCancelledException' ||
@@ -243,12 +248,22 @@ export const PdfBinaryCanvasViewer: React.FC<PdfBinaryCanvasViewerProps> = ({
         )}
 
         {error && (
-          <div className="max-w-md mx-auto my-8 p-4 rounded-lg border border-red-200 bg-red-50 text-red-800 text-xs space-y-2.5">
+          <div className="max-w-md mx-auto my-8 p-4 rounded-lg border border-red-200 bg-red-50 text-red-800 text-xs space-y-3">
             <div className="flex items-center gap-2">
               <AlertTriangle className="w-4 h-4 shrink-0" />
               <span>{error}</span>
             </div>
-            <div>
+            <div className="flex items-center gap-2 flex-wrap">
+              {onSwitchToNative && (
+                <button
+                  type="button"
+                  onClick={onSwitchToNative}
+                  className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded border border-red-300 bg-white text-red-900 font-semibold hover:bg-red-100"
+                >
+                  <Eye className="w-3.5 h-3.5" />
+                  Use Native PDF Viewer
+                </button>
+              )}
               <a
                 href={pdfUrl}
                 download={downloadFilename}

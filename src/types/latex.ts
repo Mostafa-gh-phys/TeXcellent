@@ -82,10 +82,18 @@ export interface CompileLogEntry {
   message: string;
 }
 
+export interface CompileGeneratedFile {
+  name: string;
+  sizeBytes: number;
+  downloadUrl?: string;
+  inspectable?: boolean;
+}
+
 export interface CompileResult {
   success: boolean;
   compileId: string;
   pdfUrl: string;
+  bundleDownloadUrl?: string;
   durationMs: number;
   pageCount: number;
   engineLabel: string;
@@ -93,7 +101,7 @@ export interface CompileResult {
   backendType: 'native-binary' | 'remote-endpoint' | 'built-in-typesetter';
   rawLog: string;
   diagnostics: CompileLogEntry[];
-  generatedFiles?: Array<{ name: string; sizeBytes: number }>;
+  generatedFiles?: CompileGeneratedFile[];
   timestamp: string;
 }
 
@@ -150,6 +158,7 @@ export interface SyncConfig {
 
 export type ShortcutActionId =
   | 'compile'
+  | 'saveFile'
   | 'togglePreview'
   | 'toggleSidebar'
   | 'toggleLog'

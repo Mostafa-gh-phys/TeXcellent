@@ -1,6 +1,5 @@
 import React, { useEffect, useState } from 'react';
 import {
-  X,
   Palette,
   Type,
   ArrowLeftRight,
@@ -8,6 +7,7 @@ import {
   Keyboard,
   RotateCcw,
   AlertCircle,
+  Sliders,
 } from 'lucide-react';
 import {
   DirectionMode,
@@ -25,6 +25,7 @@ import {
   formatShortcutLabel,
   keyboardEventToBinding,
 } from '../utils/shortcuts';
+import { ModalShell } from './ModalShell';
 
 export type SettingsTabId = 'general' | 'shortcuts';
 
@@ -229,80 +230,53 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   };
 
   return (
-    <div
-      role="dialog"
-      aria-modal="true"
-      aria-label="Editor and BiDi Settings"
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4"
+    <ModalShell<SettingsTabId>
+      isOpen={isOpen}
+      onClose={onClose}
+      theme={theme}
+      ariaLabel="Editor and BiDi Settings"
+      title="Settings"
+      subtitle="Configure theme, typography, bidirectional behavior, and keyboard shortcuts"
+      icon={<Sliders className="w-4 h-4" />}
+      maxWidthClass="max-w-2xl"
+      tabs={[
+        {
+          id: 'general',
+          label: 'Appearance & BiDi',
+          icon: <Palette className="w-3.5 h-3.5" />,
+        },
+        {
+          id: 'shortcuts',
+          label: 'Shortcuts',
+          icon: <Keyboard className="w-3.5 h-3.5" />,
+          badge: SHORTCUT_DEFINITIONS.length,
+        },
+      ]}
+      activeTab={activeTab}
+      onTabChange={(nextTab) => {
+        if (nextTab === 'general') setRecordingAction(null);
+        setActiveTab(nextTab);
+      }}
+      footer={
+        <>
+          <span className="text-[11px]" style={{ color: theme.ui.textMuted }}>
+            {activeTab === 'shortcuts'
+              ? 'Shortcuts are saved locally and active immediately'
+              : `Theme: ${theme.name} · ${activeFont.name} (${editorFontSize}px)`}
+          </span>
+          <button
+            type="button"
+            onClick={onClose}
+            className="px-4 py-1.5 text-xs font-semibold rounded-md"
+            style={{ backgroundColor: theme.ui.accent, color: theme.ui.accentFg }}
+          >
+            Done
+          </button>
+        </>
+      }
     >
-      <div
-        className="w-full max-w-2xl rounded-xl border shadow-2xl overflow-hidden flex flex-col max-h-[90vh]"
-        style={{
-          backgroundColor: theme.ui.bg,
-          borderColor: theme.ui.border,
-          color: theme.ui.text,
-        }}
-      >
-        <div
-          className="px-5 pt-3.5 pb-0 border-b"
-          style={{ borderColor: theme.ui.border, backgroundColor: theme.ui.surface }}
-        >
-          <div className="flex items-center justify-between pb-3">
-            <div>
-              <h2 className="text-base font-semibold">Settings</h2>
-              <p className="text-xs" style={{ color: theme.ui.textMuted }}>
-                Configure theme, typography, bidirectional behavior, and keyboard shortcuts
-              </p>
-            </div>
-            <button
-              type="button"
-              aria-label="Close settings modal"
-              onClick={onClose}
-              className="p-1.5 rounded-md hover:opacity-75"
-              style={{ color: theme.ui.textMuted }}
-            >
-              <X className="w-4 h-4" />
-            </button>
-          </div>
-
-          {/* Settings Modal Tabs */}
-          <div role="tablist" aria-label="Settings sections" className="flex items-center gap-4">
-            <button
-              type="button"
-              role="tab"
-              aria-selected={activeTab === 'general'}
-              onClick={() => {
-                setRecordingAction(null);
-                setActiveTab('general');
-              }}
-              className="inline-flex items-center gap-1.5 pb-2.5 text-xs font-semibold border-b-2 transition-colors"
-              style={{
-                borderBottomColor: activeTab === 'general' ? theme.ui.accent : 'transparent',
-                color: activeTab === 'general' ? theme.ui.text : theme.ui.textMuted,
-              }}
-            >
-              <Palette className="w-3.5 h-3.5" />
-              Appearance &amp; BiDi
-            </button>
-            <button
-              type="button"
-              role="tab"
-              aria-selected={activeTab === 'shortcuts'}
-              onClick={() => setActiveTab('shortcuts')}
-              className="inline-flex items-center gap-1.5 pb-2.5 text-xs font-semibold border-b-2 transition-colors"
-              style={{
-                borderBottomColor: activeTab === 'shortcuts' ? theme.ui.accent : 'transparent',
-                color: activeTab === 'shortcuts' ? theme.ui.text : theme.ui.textMuted,
-              }}
-            >
-              <Keyboard className="w-3.5 h-3.5" />
-              Shortcuts
-            </button>
-          </div>
-        </div>
-
-        {activeTab === 'general' ? (
-          <div className="p-5 overflow-y-auto space-y-6">
+      {activeTab === 'general' ? (
+        <div className="space-y-6">
             {/* Theme Palette */}
             <section aria-labelledby="settings-theme-heading" className="space-y-2.5">
               <div className="flex items-center gap-2">
@@ -514,7 +488,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
             </div>
           </div>
         ) : (
-          <div className="p-5 overflow-y-auto space-y-5">
+          <div className="space-y-5">
             <div className="flex items-center justify-between gap-3">
               <p className="text-xs" style={{ color: theme.ui.textMuted }}>
                 Click any shortcut badge and press a new key combination (with Ctrl, Alt, Cmd, or F1–F12). Press Esc to cancel.
@@ -542,21 +516,6 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
             {renderShortcutRows('LaTeX Editor')}
           </div>
         )}
-
-        <div
-          className="px-5 py-3 border-t flex justify-end"
-          style={{ borderColor: theme.ui.border, backgroundColor: theme.ui.surface }}
-        >
-          <button
-            type="button"
-            onClick={onClose}
-            className="px-4 py-1.5 text-xs font-semibold rounded-md"
-            style={{ backgroundColor: theme.ui.accent, color: theme.ui.accentFg }}
-          >
-            Done
-          </button>
-        </div>
-      </div>
-    </div>
+    </ModalShell>
   );
 };

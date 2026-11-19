@@ -17,6 +17,13 @@ export const SHORTCUT_DEFINITIONS: ShortcutDefinition[] = [
     defaultBinding: 'Mod-Enter',
   },
   {
+    id: 'saveFile',
+    label: 'Save Active File',
+    description: 'Save or export the current document and clear unsaved state',
+    category: 'Workspace',
+    defaultBinding: 'Mod-s',
+  },
+  {
     id: 'togglePreview',
     label: 'Toggle Preview Pane',
     description: 'Switch between Beside PDF view and Editor-only view',

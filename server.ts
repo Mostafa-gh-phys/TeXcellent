@@ -8,10 +8,16 @@ import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import crypto from 'node:crypto';
 import { GoogleGenAI, Type } from '@google/genai';
+import JSZip from 'jszip';
 import { PDFDocument, PDFFont, StandardFonts, rgb } from 'pdf-lib';
 import fontkit from '@pdf-lib/fontkit';
 import { inlineProjectInputs, parseLatexDocument, validateLatexBuild } from './src/utils/latexParser';
 import { latexMathToUnicode, splitBidiRunsForFontkit } from './src/utils/pdfTextShaper';
+import {
+  generateSyntheticAuxContent,
+  getArtifactMimeType,
+  isInspectableTextArtifact,
+} from './src/utils/texArtifacts';
 import {
   buildCompilerCliArgs,
   inferProjectCompilerMode,
@@ -28,6 +34,7 @@ import {
 } from './src/utils/texEnv';
 import type {
   BibliographyTool,
+  CompileGeneratedFile,
   CompilerInteractionMode,
   CompilerMode,
   CompilerPasses,
@@ -42,7 +49,53 @@ const execFileAsync = promisify(execFile);
 
 const PORT = Number(process.env.PORT) || 3000;
 const compiledPdfs = new Map<string, { buffer: Buffer; filename: string; createdAt: number }>();
+const compiledArtifacts = new Map<
+  string,
+  {
+    jobBase: string;
+    files: Map<string, { buffer: Buffer; mimeType: string }>;
+    createdAt: number;
+  }
+>();
 const oauthSessions = new Map<string, { accessToken: string; username: string }>();
+
+function storeCompileArtifacts(
+  compileId: string,
+  jobBase: string,
+  entries: Array<{ name: string; buffer: Buffer }>
+): CompileGeneratedFile[] {
+  const fileMap = new Map<string, { buffer: Buffer; mimeType: string }>();
+  const summary: CompileGeneratedFile[] = [];
+  for (const item of entries) {
+    const safeName = path.basename(item.name);
+    if (!safeName || fileMap.has(safeName)) continue;
+    fileMap.set(safeName, {
+      buffer: item.buffer,
+      mimeType: getArtifactMimeType(safeName),
+    });
+    summary.push({
+      name: safeName,
+      sizeBytes: item.buffer.length,
+      downloadUrl: `/api/compile/${compileId}/artifact/${encodeURIComponent(safeName)}`,
+      inspectable: isInspectableTextArtifact(safeName),
+    });
+  }
+  compiledArtifacts.set(compileId, {
+    jobBase,
+    files: fileMap,
+    createdAt: Date.now(),
+  });
+
+  // Prune entries older than 30 minutes
+  const cutoff = Date.now() - 30 * 60 * 1000;
+  for (const [k, v] of compiledPdfs.entries()) {
+    if (v.createdAt < cutoff) compiledPdfs.delete(k);
+  }
+  for (const [k, v] of compiledArtifacts.entries()) {
+    if (v.createdAt < cutoff) compiledArtifacts.delete(k);
+  }
+  return summary;
+}
 
 const RTL_CHAR_RE = /[\u0600-\u06FF\u0750-\u077F\u08A0-\u08FF\uFB50-\uFDFF\uFE70-\uFEFF]/;
 
@@ -918,23 +971,30 @@ async function startServer() {
             const buf = Buffer.from(await remoteResp.arrayBuffer());
             const compileId = crypto.randomUUID();
             const safePdfName = path.basename(mainFileName).replace(/\.tex$/i, '.pdf');
+            const jobBase = safePdfName.replace(/\.pdf$/i, '');
+            const rawRemoteLog = `Compiled via remote compiler endpoint ${remoteEndpointUrl} in ${Date.now() - started}ms.`;
             compiledPdfs.set(compileId, {
               buffer: buf,
               filename: safePdfName,
               createdAt: Date.now(),
             });
+            const generatedFiles = storeCompileArtifacts(compileId, jobBase, [
+              { name: safePdfName, buffer: buf },
+              { name: `${jobBase}.log`, buffer: Buffer.from(rawRemoteLog, 'utf8') },
+            ]);
             return res.json({
               success: true,
               compileId,
               pdfUrl: `/api/pdf/${compileId}`,
+              bundleDownloadUrl: `/api/compile/${compileId}/bundle`,
               durationMs: Date.now() - started,
               pageCount: 1,
               engineLabel: mode.toUpperCase(),
               distributionLabel: 'Remote TeX Server',
               backendType: 'remote-endpoint',
-              rawLog: `Compiled via remote compiler endpoint ${remoteEndpointUrl} in ${Date.now() - started}ms.`,
+              rawLog: rawRemoteLog,
               diagnostics: [{ level: 'info', message: 'Compiled cleanly via remote TeX server.' }],
-              generatedFiles: [{ name: safePdfName, sizeBytes: buf.length }],
+              generatedFiles,
               timestamp: new Date().toISOString(),
             });
           }
@@ -1094,7 +1154,7 @@ async function startServer() {
           }
 
           // Collect generated output files across output/compile directories
-          const generatedFiles: Array<{ name: string; sizeBytes: number }> = [];
+          const rawArtifactEntries: Array<{ name: string; buffer: Buffer }> = [];
           const seenNames = new Set<string>();
           for (const dir of candidateSearchDirs) {
             try {
@@ -1102,12 +1162,14 @@ async function startServer() {
               for (const entry of outEntries) {
                 if (
                   entry.isFile() &&
-                  /\.(pdf|dvi|xdv|synctex\.gz|aux|bbl|toc|log)$/i.test(entry.name) &&
+                  /\.(pdf|dvi|xdv|synctex\.gz|aux|bbl|blg|bcf|run\.xml|toc|out|lof|lot|nav|snm|vrb|fls|log)$/i.test(
+                    entry.name
+                  ) &&
                   !seenNames.has(entry.name)
                 ) {
                   seenNames.add(entry.name);
-                  const st = await fs.stat(path.join(dir, entry.name));
-                  generatedFiles.push({ name: entry.name, sizeBytes: st.size });
+                  const buf = await fs.readFile(path.join(dir, entry.name));
+                  rawArtifactEntries.push({ name: entry.name, buffer: buf });
                 }
               }
             } catch {
@@ -1148,6 +1210,15 @@ async function startServer() {
             lastPassOk
           );
 
+          const compileId = crypto.randomUUID();
+          const generatedFiles = storeCompileArtifacts(
+            compileId,
+            jobBase,
+            rawArtifactEntries.length > 0
+              ? rawArtifactEntries
+              : [{ name: `${jobBase}.log`, buffer: Buffer.from(combinedLog || 'No output.', 'utf8') }]
+          );
+
           if (pdfBytes) {
             let actualPageCount = 1;
             try {
@@ -1157,7 +1228,6 @@ async function startServer() {
               actualPageCount = 1;
             }
 
-            const compileId = crypto.randomUUID();
             compiledPdfs.set(compileId, {
               buffer: pdfBytes,
               filename: pdfName,
@@ -1176,6 +1246,7 @@ async function startServer() {
               success: lastPassOk,
               compileId,
               pdfUrl: `/api/pdf/${compileId}`,
+              bundleDownloadUrl: `/api/compile/${compileId}/bundle`,
               durationMs: Date.now() - started,
               pageCount: actualPageCount,
               engineLabel: effectiveMode.toUpperCase(),
@@ -1192,8 +1263,9 @@ async function startServer() {
 
           return res.json({
             success: false,
-            compileId: 'none',
+            compileId,
             pdfUrl: '',
+            bundleDownloadUrl: generatedFiles.length > 0 ? `/api/compile/${compileId}/bundle` : undefined,
             durationMs: Date.now() - started,
             pageCount: 0,
             engineLabel: effectiveMode.toUpperCase(),
@@ -1217,7 +1289,7 @@ async function startServer() {
         }
       }
 
-      // C. Built-in sandbox typesetter + real PDF binary generation
+      // C. Built-in sandbox typesetter + real PDF binary & sidecar generation
       const inlinedSource = inlineProjectInputs(mainFile.content, files);
       const effectiveBuiltinMode = inferProjectCompilerMode(files, mode);
       const parsed = parseLatexDocument(inlinedSource);
@@ -1233,17 +1305,12 @@ async function startServer() {
 
       const compileId = crypto.randomUUID();
       const pdfFileName = path.basename(mainFile.name).replace(/\.tex$/i, '.pdf');
+      const jobBase = pdfFileName.replace(/\.pdf$/i, '');
       compiledPdfs.set(compileId, {
         buffer,
         filename: pdfFileName,
         createdAt: Date.now(),
       });
-
-      // Prune PDFs older than 30 minutes
-      const cutoff = Date.now() - 30 * 60 * 1000;
-      for (const [k, v] of compiledPdfs.entries()) {
-        if (v.createdAt < cutoff) compiledPdfs.delete(k);
-      }
 
       const durationMs = Math.max(12, Date.now() - started);
       const rawLog = formatTexEngineLog(
@@ -1256,11 +1323,19 @@ async function startServer() {
         pageCount,
         durationMs
       );
+      const auxContent = generateSyntheticAuxContent(parsed, inlinedSource, pageCount);
+
+      const generatedFiles = storeCompileArtifacts(compileId, jobBase, [
+        { name: pdfFileName, buffer },
+        { name: `${jobBase}.aux`, buffer: Buffer.from(auxContent, 'utf8') },
+        { name: `${jobBase}.log`, buffer: Buffer.from(rawLog, 'utf8') },
+      ]);
 
       res.json({
         success: !hasError,
         compileId,
         pdfUrl: `/api/pdf/${compileId}`,
+        bundleDownloadUrl: `/api/compile/${compileId}/bundle`,
         durationMs,
         pageCount,
         engineLabel: effectiveBuiltinMode.toUpperCase(),
@@ -1268,7 +1343,7 @@ async function startServer() {
         backendType: 'built-in-typesetter',
         rawLog,
         diagnostics,
-        generatedFiles: [{ name: pdfFileName, sizeBytes: buffer.length }],
+        generatedFiles,
         timestamp: new Date().toISOString(),
       });
     } catch (error) {
@@ -1286,6 +1361,42 @@ async function startServer() {
     res.setHeader('Cache-Control', 'no-store');
     res.setHeader('Content-Disposition', `inline; filename="${entry.filename}"`);
     res.send(entry.buffer);
+  });
+
+  app.get('/api/compile/:id/artifact/:name', (req, res) => {
+    const bag = compiledArtifacts.get(req.params.id);
+    const safeName = path.basename(req.params.name || '');
+    const file = bag?.files.get(safeName);
+    if (!bag || !file) {
+      return res.status(404).send('Compiled artifact expired or not found. Please compile again.');
+    }
+    const inline = req.query.inline === '1';
+    res.setHeader('Content-Type', file.mimeType);
+    res.setHeader('Cache-Control', 'no-store');
+    res.setHeader(
+      'Content-Disposition',
+      `${inline ? 'inline' : 'attachment'}; filename="${safeName}"`
+    );
+    res.send(file.buffer);
+  });
+
+  app.get('/api/compile/:id/bundle', async (req, res) => {
+    const bag = compiledArtifacts.get(req.params.id);
+    if (!bag || bag.files.size === 0) {
+      return res.status(404).send('Compiled output bundle expired or not found.');
+    }
+    const zip = new JSZip();
+    for (const [name, entry] of bag.files.entries()) {
+      zip.file(name, entry.buffer);
+    }
+    const zipBuf = await zip.generateAsync({ type: 'nodebuffer' });
+    res.setHeader('Content-Type', 'application/zip');
+    res.setHeader('Cache-Control', 'no-store');
+    res.setHeader(
+      'Content-Disposition',
+      `attachment; filename="${bag.jobBase || 'texcellent'}-outputs.zip"`
+    );
+    res.send(zipBuf);
   });
 
   // 3. AI Image-to-LaTeX (Server-side Gemini Vision + Local Model Proxy)
@@ -2197,6 +2308,11 @@ async function startServer() {
 
   // Vite dev middleware or production static assets
   if (process.env.NODE_ENV !== 'production') {
+    const pdfjsRoot = path.resolve(process.cwd(), 'node_modules', 'pdfjs-dist');
+    app.use('/pdfjs/cmaps', express.static(path.join(pdfjsRoot, 'cmaps')));
+    app.use('/pdfjs/standard_fonts', express.static(path.join(pdfjsRoot, 'standard_fonts')));
+    app.use('/pdfjs/wasm', express.static(path.join(pdfjsRoot, 'wasm')));
+
     const { createServer: createViteServer } = await import('vite');
     const vite = await createViteServer({
       server: {

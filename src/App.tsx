@@ -3,6 +3,8 @@ import {
   Play,
   PanelLeft,
   FileCode2,
+  FolderOutput,
+  Save,
   Terminal,
   ChevronDown,
   ChevronUp,
@@ -226,6 +228,9 @@ export default function App() {
   const [activeModal, setActiveModal] = useState<
     null | 'file' | 'smart' | 'sync' | 'compiler' | 'settings' | 'external-fallback'
   >(null);
+  const [dirtyFileIds, setDirtyFileIds] = useState<Set<string>>(() => new Set());
+  const [pendingCloseFileId, setPendingCloseFileId] = useState<string | null>(null);
+  const [saveNotice, setSaveNotice] = useState<string>('');
 
   const editorActionsRef = useRef<{
     insertAtCursor: (snippet: string) => void;
@@ -235,6 +240,7 @@ export default function App() {
   const isResizingRef = useRef(false);
   const sidebarFolderInputRef = useRef<HTMLInputElement | null>(null);
   const lastTargetFileIdRef = useRef<string | undefined>(undefined);
+  const saveNoticeTimerRef = useRef<number | null>(null);
 
   const theme = EDITOR_THEMES[themeId] || EDITOR_THEMES['github-light'];
   const editorFont = EDITOR_FONTS[editorFontId] || EDITOR_FONTS.jetbrains;
@@ -250,7 +256,7 @@ export default function App() {
     setOpenTabIds((prev) => (prev.includes(fileId) ? prev : [...prev, fileId]));
   }, []);
 
-  const closeFileTab = useCallback(
+  const forceCloseFileTab = useCallback(
     (fileId: string) => {
       setOpenTabIds((prev) => {
         if (prev.length <= 1) return prev;
@@ -262,8 +268,26 @@ export default function App() {
         }
         return next;
       });
+      setDirtyFileIds((prev) => {
+        if (!prev.has(fileId)) return prev;
+        const next = new Set(prev);
+        next.delete(fileId);
+        return next;
+      });
     },
     [activeFileId]
+  );
+
+  const closeFileTab = useCallback(
+    (fileId: string) => {
+      if (openTabIds.length <= 1) return;
+      if (dirtyFileIds.has(fileId)) {
+        setPendingCloseFileId(fileId);
+        return;
+      }
+      forceCloseFileTab(fileId);
+    },
+    [openTabIds.length, dirtyFileIds, forceCloseFileTab]
   );
 
   // Persist workspace state
@@ -502,16 +526,111 @@ export default function App() {
     };
   }, []);
 
+  // Warn user before closing or reloading when files have unsaved changes
+  useEffect(() => {
+    if (isExternalPreviewWindow || dirtyFileIds.size === 0) return;
+    const onBeforeUnload = (e: BeforeUnloadEvent) => {
+      e.preventDefault();
+      e.returnValue = '';
+    };
+    window.addEventListener('beforeunload', onBeforeUnload);
+    return () => window.removeEventListener('beforeunload', onBeforeUnload);
+  }, [isExternalPreviewWindow, dirtyFileIds.size]);
+
+  const showSaveFeedback = useCallback((msg: string) => {
+    setSaveNotice(msg);
+    if (saveNoticeTimerRef.current) {
+      window.clearTimeout(saveNoticeTimerRef.current);
+    }
+    saveNoticeTimerRef.current = window.setTimeout(() => {
+      setSaveNotice('');
+    }, 2600);
+  }, []);
+
+  const handleSaveFile = useCallback(
+    async (targetFile?: ProjectFile): Promise<boolean> => {
+      const fileToSave = targetFile || activeFile;
+      if (!fileToSave) return false;
+
+      let blob: Blob;
+      if (fileToSave.language === 'asset' && fileToSave.binaryBase64) {
+        const bin = atob(fileToSave.binaryBase64);
+        const arr = new Uint8Array(bin.length);
+        for (let i = 0; i < bin.length; i++) arr[i] = bin.charCodeAt(i);
+        blob = new Blob([arr], { type: fileToSave.mimeType || 'application/octet-stream' });
+      } else {
+        blob = new Blob([fileToSave.content], { type: 'text/plain;charset=utf-8' });
+      }
+
+      const fileNameOnly = fileToSave.name.split('/').pop() || fileToSave.name;
+      const triggerDownload = () => {
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = fileNameOnly;
+        a.click();
+        URL.revokeObjectURL(url);
+      };
+
+      const picker = (
+        window as unknown as {
+          showSaveFilePicker?: (opts: { suggestedName?: string }) => Promise<{
+            createWritable: () => Promise<{
+              write: (data: Blob) => Promise<void>;
+              close: () => Promise<void>;
+            }>;
+          }>;
+        }
+      ).showSaveFilePicker;
+
+      const ua = typeof navigator !== 'undefined' ? navigator.userAgent || '' : '';
+      const isAutomatedOrEmbedded =
+        (typeof navigator !== 'undefined' && (Boolean(navigator.webdriver) || /HeadlessChrome/i.test(ua))) ||
+        (typeof window !== 'undefined' && window.self !== window.top);
+
+      const canUsePicker = typeof picker === 'function' && !isAutomatedOrEmbedded;
+
+      if (canUsePicker) {
+        try {
+          const handle = await picker({ suggestedName: fileNameOnly });
+          const writable = await handle.createWritable();
+          await writable.write(blob);
+          await writable.close();
+        } catch (err) {
+          if (err instanceof DOMException && err.name === 'AbortError') {
+            return false;
+          }
+          triggerDownload();
+        }
+      } else {
+        triggerDownload();
+      }
+
+      setDirtyFileIds((prev) => {
+        if (!prev.has(fileToSave.id)) return prev;
+        const next = new Set(prev);
+        next.delete(fileToSave.id);
+        return next;
+      });
+      showSaveFeedback(`Saved ${fileNameOnly}`);
+      return true;
+    },
+    [activeFile, showSaveFeedback]
+  );
+
   const triggerWorkspaceShortcut = useCallback(
     (
       action: Extract<
         ShortcutActionId,
-        'compile' | 'togglePreview' | 'toggleSidebar' | 'toggleLog' | 'openFiles' | 'openSettings'
+        'compile' | 'saveFile' | 'togglePreview' | 'toggleSidebar' | 'toggleLog' | 'openFiles' | 'openSettings'
       >
     ) => {
       switch (action) {
         case 'compile':
           handleCompile();
+          break;
+        case 'saveFile':
+          handleSaveFile();
           break;
         case 'togglePreview':
           setPreviewMode((prev) => (prev === 'beside' ? 'editor-only' : 'beside'));
@@ -530,7 +649,7 @@ export default function App() {
           break;
       }
     },
-    [handleCompile]
+    [handleCompile, handleSaveFile]
   );
 
   // Global keyboard shortcut listener (skips while recording new shortcuts in Settings)
@@ -549,9 +668,9 @@ export default function App() {
       const actions: Array<
         Extract<
           ShortcutActionId,
-          'compile' | 'togglePreview' | 'toggleSidebar' | 'toggleLog' | 'openFiles' | 'openSettings'
+          'compile' | 'saveFile' | 'togglePreview' | 'toggleSidebar' | 'toggleLog' | 'openFiles' | 'openSettings'
         >
-      > = ['compile', 'togglePreview', 'toggleSidebar', 'toggleLog', 'openFiles', 'openSettings'];
+      > = ['compile', 'saveFile', 'togglePreview', 'toggleSidebar', 'toggleLog', 'openFiles', 'openSettings'];
 
       for (const actionId of actions) {
         if (matchesShortcutEvent(e, shortcuts[actionId], isMac)) {
@@ -566,9 +685,27 @@ export default function App() {
     return () => window.removeEventListener('keydown', onKeyDown);
   }, [isExternalPreviewWindow, shortcuts, triggerWorkspaceShortcut]);
 
+  useEffect(() => {
+    if (!pendingCloseFileId) return;
+    const onEscape = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        setPendingCloseFileId(null);
+      }
+    };
+    window.addEventListener('keydown', onEscape);
+    return () => window.removeEventListener('keydown', onEscape);
+  }, [pendingCloseFileId]);
+
   const handleFileContentChange = (nextContent: string) => {
-    if (!activeFile) return;
+    if (!activeFile || nextContent === activeFile.content) return;
     const now = new Date().toISOString();
+    setDirtyFileIds((prev) => {
+      if (prev.has(activeFile.id)) return prev;
+      const next = new Set(prev);
+      next.add(activeFile.id);
+      return next;
+    });
     setProject((prev) => ({
       ...prev,
       updatedAt: now,
@@ -1326,6 +1463,7 @@ Write your document here.
             projects={projects}
             activeProjectId={project.id}
             activeFileId={activeFile?.id || ''}
+            dirtyFileIds={dirtyFileIds}
             onSelectProjectFile={handleSelectProjectFile}
             onSetMainFile={(projectId, fileId) =>
               setProjects((prevList) =>
@@ -1372,6 +1510,7 @@ Write your document here.
               >
                 {openTabFiles.map((tabFile) => {
                   const isTabActive = tabFile.id === activeFile?.id;
+                  const isTabDirty = dirtyFileIds.has(tabFile.id);
                   return (
                     <div
                       key={tabFile.id}
@@ -1398,7 +1537,7 @@ Write your document here.
                         role="tab"
                         aria-selected={isTabActive}
                         onClick={() => openFileTab(tabFile.id)}
-                        title={tabFile.name}
+                        title={isTabDirty ? `${tabFile.name} (unsaved)` : tabFile.name}
                         className="flex items-center gap-1.5 pl-3 pr-1.5 py-1.5 text-xs font-mono whitespace-nowrap"
                         style={{
                           color: isTabActive ? theme.ui.text : theme.ui.textMuted,
@@ -1407,6 +1546,13 @@ Write your document here.
                       >
                         <FileCode2 className="w-3 h-3 shrink-0 opacity-75" />
                         <span>{tabFile.name}</span>
+                        {isTabDirty && (
+                          <span
+                            aria-label={`${tabFile.name} unsaved`}
+                            className="w-1.5 h-1.5 rounded-full shrink-0"
+                            style={{ backgroundColor: theme.ui.accent }}
+                          />
+                        )}
                       </button>
                       {openTabFiles.length > 1 && (
                         <button
@@ -1510,21 +1656,29 @@ Write your document here.
 
             {/* Quiet Editor Footer */}
             <div
-              className="flex items-center justify-between px-3 py-1.5 border-t text-[11px] shrink-0"
+              className="flex items-center justify-between px-3 py-1.5 border-t text-[11px] shrink-0 gap-2"
               style={{
                 backgroundColor: theme.ui.surface,
                 borderColor: theme.ui.border,
                 color: theme.ui.textMuted,
               }}
             >
-              <div className="flex items-center gap-3 tabular-nums">
+              <div className="flex items-center gap-3 tabular-nums min-w-0 truncate">
                 <span>
                   Ln {cursorInfo.line}, Col {cursorInfo.col}
                 </span>
                 <span aria-hidden="true">·</span>
                 <span>Line Dir: {cursorInfo.detectedDir.toUpperCase()}</span>
-                <span aria-hidden="true">·</span>
-                <span>Input Script: {keyboardScript.toUpperCase()}</span>
+                <span aria-hidden="true" className="hidden sm:inline">·</span>
+                <span className="hidden sm:inline">Input Script: {keyboardScript.toUpperCase()}</span>
+                {saveNotice && (
+                  <>
+                    <span aria-hidden="true">·</span>
+                    <span className="font-semibold" style={{ color: theme.ui.accent }}>
+                      {saveNotice}
+                    </span>
+                  </>
+                )}
               </div>
 
               {(() => {
@@ -1534,8 +1688,22 @@ Write your document here.
                 const warnCount = (compileResult?.diagnostics || []).filter(
                   (d) => d.level === 'warning'
                 ).length;
+                const outputCount = compileResult?.generatedFiles?.length || 0;
+                const activeIsDirty = activeFile ? dirtyFileIds.has(activeFile.id) : false;
                 return (
-                  <div className="flex items-center gap-3">
+                  <div className="flex items-center gap-3 shrink-0">
+                    {activeIsDirty && (
+                      <button
+                        type="button"
+                        onClick={() => handleSaveFile()}
+                        className="inline-flex items-center gap-1 font-semibold hover:underline"
+                        style={{ color: theme.ui.accent }}
+                        title="Save active file to disk"
+                      >
+                        <Save className="w-3 h-3" />
+                        <span>Save</span>
+                      </button>
+                    )}
                     {(errCount > 0 || warnCount > 0) && (
                       <button
                         type="button"
@@ -1551,6 +1719,25 @@ Write your document here.
                           {errCount > 0 && warnCount > 0 ? ' · ' : ''}
                           {warnCount > 0 ? `${warnCount} warn` : ''}
                         </span>
+                      </button>
+                    )}
+                    {outputCount > 0 && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          if (showLog && logTab === 'files') {
+                            setShowLog(false);
+                          } else {
+                            setLogTab('files');
+                            setShowLog(true);
+                          }
+                        }}
+                        className="inline-flex items-center gap-1 hover:underline tabular-nums"
+                        style={{ color: theme.ui.text }}
+                        title="Inspect and save compiled sidecar files (.aux, .log, .pdf)"
+                      >
+                        <FolderOutput className="w-3 h-3" />
+                        <span>Outputs ({outputCount})</span>
                       </button>
                     )}
                     <button
@@ -1619,6 +1806,9 @@ Write your document here.
         theme={theme}
         project={project}
         activeFile={activeFile}
+        activeFileDirty={activeFile ? dirtyFileIds.has(activeFile.id) : false}
+        bundleDownloadUrl={compileResult?.bundleDownloadUrl}
+        onSaveActiveFile={() => handleSaveFile()}
         onCreateFile={handleCreateFile}
         onNewBlankProject={handleNewBlankProject}
         onSelectTemplate={handleSelectTemplate}
@@ -1723,6 +1913,98 @@ Write your document here.
           </div>
         </div>
       )}
+      {/* Unsaved Tab Close Confirmation Dialog */}
+      {pendingCloseFileId && (() => {
+        const pendingFile = project.files.find((f) => f.id === pendingCloseFileId);
+        if (!pendingFile) return null;
+        return (
+          <div
+            role="dialog"
+            aria-modal="true"
+            aria-label="Unsaved changes confirmation"
+            onMouseDown={(e) => {
+              if (e.target === e.currentTarget) {
+                setPendingCloseFileId(null);
+              }
+            }}
+            onKeyDown={(e) => {
+              if (e.key === 'Escape') {
+                e.preventDefault();
+                setPendingCloseFileId(null);
+              }
+            }}
+            className="fixed inset-0 z-50 flex items-center justify-center bg-black/55 p-4 backdrop-blur-[1px]"
+          >
+            <div
+              className="w-full max-w-md rounded-xl border shadow-2xl overflow-hidden"
+              style={{
+                backgroundColor: theme.ui.bg,
+                borderColor: theme.ui.border,
+                color: theme.ui.text,
+              }}
+            >
+              <div className="p-5 space-y-2">
+                <h2 className="text-sm font-semibold">
+                  Save changes to <span className="font-mono">{pendingFile.name}</span>?
+                </h2>
+                <p className="text-xs leading-relaxed" style={{ color: theme.ui.textMuted }}>
+                  This file has unsaved edits since your last disk save. Save a copy before closing its tab, or close without saving to disk.
+                </p>
+              </div>
+              <div
+                className="px-5 py-3 border-t flex items-center justify-end gap-2"
+                style={{ borderColor: theme.ui.border, backgroundColor: theme.ui.surface }}
+              >
+                <button
+                  type="button"
+                  onClick={() => setPendingCloseFileId(null)}
+                  className="px-3 py-1.5 text-xs font-medium rounded-md border"
+                  style={{
+                    borderColor: theme.ui.border,
+                    backgroundColor: theme.ui.bg,
+                    color: theme.ui.text,
+                  }}
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    const idToClose = pendingFile.id;
+                    setPendingCloseFileId(null);
+                    forceCloseFileTab(idToClose);
+                  }}
+                  className="px-3 py-1.5 text-xs font-medium rounded-md border"
+                  style={{
+                    borderColor: theme.ui.border,
+                    backgroundColor: theme.ui.bg,
+                    color: theme.ui.textMuted,
+                  }}
+                >
+                  Don&apos;t Save
+                </button>
+                <button
+                  type="button"
+                  onClick={async () => {
+                    const saved = await handleSaveFile(pendingFile);
+                    if (saved) {
+                      setPendingCloseFileId(null);
+                      forceCloseFileTab(pendingFile.id);
+                    }
+                  }}
+                  className="px-3.5 py-1.5 text-xs font-semibold rounded-md"
+                  style={{
+                    backgroundColor: theme.ui.accent,
+                    color: theme.ui.accentFg,
+                  }}
+                >
+                  Save &amp; Close
+                </button>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
     </div>
   );
 }

@@ -22,6 +22,7 @@ interface FileTreeSidebarProps {
   projects: LatexProject[];
   activeProjectId: string;
   activeFileId: string;
+  dirtyFileIds?: Set<string>;
   onSelectProjectFile: (projectId: string, fileId: string) => void;
   onSetMainFile?: (projectId: string, fileId: string) => void;
   onAddFile: (projectId: string, filePath: string) => void;
@@ -37,6 +38,7 @@ export const FileTreeSidebar: React.FC<FileTreeSidebarProps> = ({
   projects,
   activeProjectId,
   activeFileId,
+  dirtyFileIds,
   onSelectProjectFile,
   onSetMainFile,
   onAddFile,
@@ -178,6 +180,7 @@ export const FileTreeSidebar: React.FC<FileTreeSidebarProps> = ({
       const file = node.file;
       const isActive = isActiveProject && file.id === activeFileId;
       const isMain = file.id === proj.mainFileId;
+      const isDirty = Boolean(dirtyFileIds?.has(file.id));
 
       return (
         <div
@@ -191,7 +194,7 @@ export const FileTreeSidebar: React.FC<FileTreeSidebarProps> = ({
           <button
             type="button"
             onClick={() => onSelectProjectFile(proj.id, file.id)}
-            title={`${proj.name} / ${node.path}`}
+            title={`${proj.name} / ${node.path}${isDirty ? ' (unsaved)' : ''}`}
             className="flex items-center gap-1.5 text-left text-xs min-w-0 flex-1"
             style={{
               color: isActive ? theme.ui.text : theme.ui.textMuted,
@@ -200,6 +203,14 @@ export const FileTreeSidebar: React.FC<FileTreeSidebarProps> = ({
           >
             {renderFileIcon(file)}
             <span className="truncate font-mono">{node.name}</span>
+            {isDirty && (
+              <span
+                aria-label="Unsaved changes"
+                title="Unsaved changes"
+                className="w-1.5 h-1.5 rounded-full shrink-0"
+                style={{ backgroundColor: theme.ui.accent }}
+              />
+            )}
             {isMain && (
               <span
                 className="text-[9px] px-1 rounded border shrink-0"

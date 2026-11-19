@@ -7,7 +7,7 @@
   "scripts": {
     "dev": "tsx server.ts",
     "start": "node server.ts",
-    "build": "vite build",
+    "build": "vite build && node scripts/copy-pdfjs-assets.mjs",
     "preview": "vite preview",
     "clean": "node -e \"for (const p of ['dist', 'dist-server', 'release']) require('node:fs').rmSync(p, { recursive: true, force: true })\"",
     "lint": "tsc --noEmit",

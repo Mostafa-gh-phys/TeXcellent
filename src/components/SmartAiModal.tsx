@@ -1,6 +1,5 @@
 import React, { useMemo, useRef, useState } from 'react';
 import {
-  X,
   Upload,
   Image as ImageIcon,
   Check,
@@ -12,11 +11,13 @@ import {
   Wand2,
   Download,
   Search,
+  Blocks,
 } from 'lucide-react';
 import { CompilerMode } from '../types/latex';
 import { EditorTheme } from '../utils/themes';
 import { latexToMarkdown, markdownToLatex } from '../utils/latexMarkdown';
 import { SMART_SNIPPETS, SnippetCategory } from '../utils/smartSnippets';
+import { ModalShell } from './ModalShell';
 
 interface SmartAiModalProps {
   isOpen: boolean;
@@ -297,86 +298,41 @@ export const SmartAiModal: React.FC<SmartAiModalProps> = ({
   ];
 
   return (
-    <div
-      role="dialog"
-      aria-modal="true"
-      aria-label="Smart Tools and AI Assistant"
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4"
+    <ModalShell<SmartTab>
+      isOpen={isOpen}
+      onClose={onClose}
+      theme={theme}
+      ariaLabel="Smart Tools and AI Assistant"
+      title="Smart(+AI) Studio Tools"
+      subtitle="Image OCR to LaTeX, Markdown ↔ LaTeX conversion, and curated smart snippets"
+      icon={<Sparkles className="w-4 h-4" />}
+      maxWidthClass="max-w-4xl"
+      tabs={[
+        { id: 'image2tex', label: 'Image → LaTeX', icon: <ImageIcon className="w-3.5 h-3.5" /> },
+        { id: 'md2tex', label: 'Markdown → LaTeX', icon: <FileCode2 className="w-3.5 h-3.5" /> },
+        { id: 'tex2md', label: 'LaTeX → Markdown', icon: <Wand2 className="w-3.5 h-3.5" /> },
+        {
+          id: 'snippets',
+          label: 'Smart Snippets',
+          icon: <Blocks className="w-3.5 h-3.5" />,
+          badge: SMART_SNIPPETS.length,
+        },
+      ]}
+      activeTab={activeTab}
+      onTabChange={(nextTab) => {
+        setActiveTab(nextTab);
+        setError('');
+        if (nextTab === 'tex2md' && !latexInput.trim() && activeFileContent.trim()) {
+          setLatexInput(activeFileContent);
+          setTexToMdOutput(latexToMarkdown(activeFileContent));
+        }
+      }}
     >
-      <div
-        className="w-full max-w-4xl rounded-xl border shadow-2xl overflow-hidden flex flex-col max-h-[90vh]"
-        style={{
-          backgroundColor: theme.ui.bg,
-          borderColor: theme.ui.border,
-          color: theme.ui.text,
-        }}
-      >
-        <div
-          className="flex items-center justify-between px-5 py-3.5 border-b"
-          style={{ borderColor: theme.ui.border, backgroundColor: theme.ui.surface }}
-        >
-          <div className="flex items-center gap-2.5">
-            <Sparkles className="w-4 h-4" style={{ color: theme.ui.accent }} />
-            <div>
-              <h2 className="text-base font-semibold">Smart(+AI) Studio Tools</h2>
-              <p className="text-xs" style={{ color: theme.ui.textMuted }}>
-                Image OCR to LaTeX, Markdown ↔ LaTeX conversion, and curated smart snippets
-              </p>
-            </div>
-          </div>
-          <button
-            type="button"
-            aria-label="Close Smart AI modal"
-            onClick={onClose}
-            className="p-1.5 rounded-md hover:opacity-75"
-            style={{ color: theme.ui.textMuted }}
-          >
-            <X className="w-4 h-4" />
-          </button>
+      {error && (
+        <div className="p-3 rounded-lg bg-red-50 border border-red-200 text-red-700 text-xs">
+          {error}
         </div>
-
-        {/* Navigation Tabs */}
-        <div
-          className="flex items-center gap-1 px-5 pt-2.5 border-b overflow-x-auto shrink-0"
-          style={{ borderColor: theme.ui.border, backgroundColor: theme.ui.surface }}
-        >
-          {[
-            { id: 'image2tex' as SmartTab, label: 'Image → LaTeX' },
-            { id: 'md2tex' as SmartTab, label: 'Markdown → LaTeX' },
-            { id: 'tex2md' as SmartTab, label: 'LaTeX → Markdown' },
-            { id: 'snippets' as SmartTab, label: 'Smart Snippets' },
-          ].map((tab) => {
-            const active = activeTab === tab.id;
-            return (
-              <button
-                key={tab.id}
-                type="button"
-                onClick={() => {
-                  setActiveTab(tab.id);
-                  setError('');
-                  if (tab.id === 'tex2md' && !latexInput.trim() && activeFileContent.trim()) {
-                    setLatexInput(activeFileContent);
-                    setTexToMdOutput(latexToMarkdown(activeFileContent));
-                  }
-                }}
-                className="px-4 py-2 text-xs font-semibold border-b-2 transition-colors whitespace-nowrap"
-                style={{
-                  borderColor: active ? theme.ui.accent : 'transparent',
-                  color: active ? theme.ui.text : theme.ui.textMuted,
-                }}
-              >
-                {tab.label}
-              </button>
-            );
-          })}
-        </div>
-
-        <div className="p-5 overflow-y-auto space-y-4">
-          {error && (
-            <div className="p-3 rounded-lg bg-red-50 border border-red-200 text-red-700 text-xs">
-              {error}
-            </div>
-          )}
+      )}
 
           {/* TAB 1: Image -> LaTeX */}
           {activeTab === 'image2tex' && (
@@ -1040,8 +996,6 @@ export const SmartAiModal: React.FC<SmartAiModalProps> = ({
               </div>
             </div>
           )}
-        </div>
-      </div>
-    </div>
+    </ModalShell>
   );
 };

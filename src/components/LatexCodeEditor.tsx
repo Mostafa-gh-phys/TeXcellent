@@ -1,5 +1,6 @@
 import React, { useEffect, useRef } from 'react';
 import {
+  Annotation,
   EditorState,
   Compartment,
   RangeSetBuilder,
@@ -37,9 +38,11 @@ import {
 } from '../utils/bidiLatex';
 import { getLatexSuggestions } from '../utils/latexAutocomplete';
 
+const externalSyncAnnotation = Annotation.define<boolean>();
+
 type WorkspaceShortcutAction = Extract<
   ShortcutActionId,
-  'compile' | 'togglePreview' | 'toggleSidebar' | 'toggleLog' | 'openFiles' | 'openSettings'
+  'compile' | 'saveFile' | 'togglePreview' | 'toggleSidebar' | 'toggleLog' | 'openFiles' | 'openSettings'
 >;
 
 interface LatexCodeEditorProps {
@@ -304,6 +307,7 @@ export const LatexCodeEditor: React.FC<LatexCodeEditorProps> = ({
   const makeKeymapExtension = (map: ShortcutMap) => {
     const workspaceActions: WorkspaceShortcutAction[] = [
       'compile',
+      'saveFile',
       'togglePreview',
       'toggleSidebar',
       'toggleLog',
@@ -444,6 +448,11 @@ export const LatexCodeEditor: React.FC<LatexCodeEditorProps> = ({
         pluginCompRef.current.of(makeBidiPlugin(theme, directionMode)),
         EditorView.updateListener.of((update) => {
           if (update.docChanged) {
+            const isExternalOnly = update.transactions.every((tr) =>
+              Boolean(tr.annotation(externalSyncAnnotation))
+            );
+            if (isExternalOnly) return;
+
             const nextDoc = update.state.doc.toString();
             latestProps.current.onChange(nextDoc);
 
@@ -529,6 +538,7 @@ export const LatexCodeEditor: React.FC<LatexCodeEditorProps> = ({
     if (current !== value) {
       view.dispatch({
         changes: { from: 0, to: current.length, insert: value },
+        annotations: externalSyncAnnotation.of(true),
       });
     }
   }, [value]);

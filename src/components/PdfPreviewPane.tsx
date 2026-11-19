@@ -35,6 +35,7 @@ export const PdfPreviewPane: React.FC<PdfPreviewPaneProps> = ({
   isExternalWindow = false,
 }) => {
   const [zoom, setZoom] = useState(100);
+  const [viewerEngine, setViewerEngine] = useState<'canvas' | 'native'>('canvas');
 
   const errorMessage =
     compileResult?.diagnostics.find((d) => d.level === 'error')?.message ||
@@ -58,7 +59,7 @@ export const PdfPreviewPane: React.FC<PdfPreviewPaneProps> = ({
     >
       {/* Preview Toolbar */}
       <div
-        className="flex items-center justify-between gap-2 px-3 py-2 border-b shrink-0"
+        className="flex items-center justify-between gap-2 px-3 py-2 border-b shrink-0 overflow-x-auto"
         style={{
           backgroundColor: theme.ui.surface,
           borderColor: theme.ui.border,
@@ -79,7 +80,7 @@ export const PdfPreviewPane: React.FC<PdfPreviewPaneProps> = ({
 
           {compileResult && (
             <span
-              className="hidden sm:inline text-xs tabular-nums whitespace-nowrap ml-1 truncate"
+              className="hidden lg:inline text-xs tabular-nums whitespace-nowrap ml-1 truncate"
               style={{ color: theme.ui.textMuted }}
             >
               {compileResult.engineLabel} · {compileResult.distributionLabel} · {compileResult.durationMs}ms
@@ -88,30 +89,69 @@ export const PdfPreviewPane: React.FC<PdfPreviewPaneProps> = ({
         </div>
 
         <div className="flex items-center gap-1.5 shrink-0">
-          <button
-            type="button"
-            aria-label="Zoom out preview"
-            onClick={() => setZoom((z) => Math.max(60, z - 10))}
-            className="p-1.5 rounded hover:opacity-80 transition-opacity"
-            style={{ color: theme.ui.textMuted }}
+          {/* Canvas vs Native Chromium PDFium Switch */}
+          <div
+            role="group"
+            aria-label="PDF viewer engine"
+            className="flex items-center p-0.5 rounded border"
+            style={{ backgroundColor: theme.ui.surfaceAlt, borderColor: theme.ui.border }}
           >
-            <ZoomOut className="w-3.5 h-3.5" />
-          </button>
-          <span
-            className="text-xs tabular-nums w-10 text-center select-none"
-            style={{ color: theme.ui.textMuted }}
-          >
-            {zoom}%
-          </span>
-          <button
-            type="button"
-            aria-label="Zoom in preview"
-            onClick={() => setZoom((z) => Math.min(250, z + 10))}
-            className="p-1.5 rounded hover:opacity-80 transition-opacity"
-            style={{ color: theme.ui.textMuted }}
-          >
-            <ZoomIn className="w-3.5 h-3.5" />
-          </button>
+            <button
+              type="button"
+              onClick={() => setViewerEngine('canvas')}
+              aria-pressed={viewerEngine === 'canvas'}
+              title="High-DPI PDF.js Canvas Renderer"
+              className="px-2 py-0.5 text-[11px] font-semibold rounded transition-colors"
+              style={{
+                backgroundColor: viewerEngine === 'canvas' ? theme.ui.bg : 'transparent',
+                color: viewerEngine === 'canvas' ? theme.ui.text : theme.ui.textMuted,
+              }}
+            >
+              Canvas
+            </button>
+            <button
+              type="button"
+              onClick={() => setViewerEngine('native')}
+              aria-pressed={viewerEngine === 'native'}
+              title="Native Browser / Chromium PDFium Viewer"
+              className="px-2 py-0.5 text-[11px] font-semibold rounded transition-colors"
+              style={{
+                backgroundColor: viewerEngine === 'native' ? theme.ui.bg : 'transparent',
+                color: viewerEngine === 'native' ? theme.ui.text : theme.ui.textMuted,
+              }}
+            >
+              Native
+            </button>
+          </div>
+
+          {viewerEngine === 'canvas' && (
+            <>
+              <button
+                type="button"
+                aria-label="Zoom out preview"
+                onClick={() => setZoom((z) => Math.max(60, z - 10))}
+                className="p-1.5 rounded hover:opacity-80 transition-opacity"
+                style={{ color: theme.ui.textMuted }}
+              >
+                <ZoomOut className="w-3.5 h-3.5" />
+              </button>
+              <span
+                className="text-xs tabular-nums w-10 text-center select-none"
+                style={{ color: theme.ui.textMuted }}
+              >
+                {zoom}%
+              </span>
+              <button
+                type="button"
+                aria-label="Zoom in preview"
+                onClick={() => setZoom((z) => Math.min(250, z + 10))}
+                className="p-1.5 rounded hover:opacity-80 transition-opacity"
+                style={{ color: theme.ui.textMuted }}
+              >
+                <ZoomIn className="w-3.5 h-3.5" />
+              </button>
+            </>
+          )}
 
           {compileResult?.pdfUrl && (
             <a
@@ -157,12 +197,23 @@ export const PdfPreviewPane: React.FC<PdfPreviewPaneProps> = ({
           Compiling document...
         </div>
       ) : compileResult?.pdfUrl ? (
-        <PdfBinaryCanvasViewer
-          pdfUrl={compileResult.pdfUrl}
-          zoom={zoom}
-          theme={theme}
-          downloadFilename={downloadFilename}
-        />
+        viewerEngine === 'native' ? (
+          <iframe
+            key={compileResult.pdfUrl}
+            title="Native PDF Preview"
+            data-testid="native-pdf-iframe"
+            src={`${compileResult.pdfUrl}#navpanes=0&view=FitH`}
+            className="flex-1 w-full h-full border-0 bg-neutral-700"
+          />
+        ) : (
+          <PdfBinaryCanvasViewer
+            pdfUrl={compileResult.pdfUrl}
+            zoom={zoom}
+            theme={theme}
+            downloadFilename={downloadFilename}
+            onSwitchToNative={() => setViewerEngine('native')}
+          />
+        )
       ) : compileResult && !compileResult.success ? (
         <div className="flex-1 overflow-auto p-6 flex items-center justify-center">
           <div

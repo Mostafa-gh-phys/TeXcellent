@@ -13,6 +13,7 @@ import {
 test('mergeShortcuts preserves defaults and normalizes valid overrides', () => {
   const merged = mergeShortcuts({ compile: 'ctrl+shift+k', invalidAction: 'foo' });
   assert.equal(merged.compile, 'Ctrl-Shift-k');
+  assert.equal(merged.saveFile, 'Mod-s');
   assert.equal(merged.toggleSidebar, DEFAULT_SHORTCUTS.toggleSidebar);
   assert.equal(normalizeBindingString('mod + shift + B'), 'Mod-Shift-b');
 });

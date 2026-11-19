@@ -1,0 +1,39 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512" fill="none">
+  <defs>
+    <linearGradient id="bg" x1="64" y1="32" x2="448" y2="480" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#1e293b" />
+      <stop offset="55%" stop-color="#0f172a" />
+      <stop offset="100%" stop-color="#090d16" />
+    </linearGradient>
+    <linearGradient id="borderGlow" x1="256" y1="24" x2="256" y2="488" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#475569" stop-opacity="0.9" />
+      <stop offset="100%" stop-color="#1e293b" stop-opacity="0.8" />
+    </linearGradient>
+    <radialGradient id="topSheen" cx="50%" cy="18%" r="60%">
+      <stop offset="0%" stop-color="#3b82f6" stop-opacity="0.22" />
+      <stop offset="100%" stop-color="#0f172a" stop-opacity="0" />
+    </radialGradient>
+  </defs>
+
+  <!-- Rounded squircle app icon badge (padded for macOS / Windows / Linux dock compatibility) -->
+  <rect x="24" y="24" width="464" height="464" rx="108" fill="url(#bg)" />
+  <rect x="24" y="24" width="464" height="464" rx="108" fill="url(#topSheen)" />
+  <rect x="28" y="28" width="456" height="456" rx="104" stroke="url(#borderGlow)" stroke-width="8" />
+
+  <!-- Subtle accent rule at bottom -->
+  <rect x="176" y="388" width="160" height="10" rx="5" fill="#f59e0b" opacity="0.85" />
+
+  <!-- Crisp {TeX} mark with classic lowered E and {TeXcellent} palette -->
+  <g font-family="'CMU Serif', 'Latin Modern Roman', 'Liberation Serif', 'Noto Serif', Georgia, 'Times New Roman', serif">
+    <!-- Left curly brace -->
+    <text x="58" y="316" fill="#94a3b8" font-size="214" font-weight="700">{</text>
+    <!-- T -->
+    <text x="142" y="302" fill="#60a5fa" font-size="148" font-weight="700">T</text>
+    <!-- Lowered E -->
+    <text x="218" y="330" fill="#f59e0b" font-size="136" font-weight="700">E</text>
+    <!-- X -->
+    <text x="304" y="302" fill="#60a5fa" font-size="148" font-weight="700">X</text>
+    <!-- Right curly brace -->
+    <text x="394" y="316" fill="#94a3b8" font-size="214" font-weight="700">}</text>
+  </g>
+</svg>

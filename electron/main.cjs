@@ -61,12 +61,14 @@ async function createWindow() {
   const baseUrl = `http://127.0.0.1:${port}`;
   await waitForServer(baseUrl);
 
+  const iconPath = path.join(__dirname, 'icon.png');
   const win = new BrowserWindow({
     width: 1440,
     height: 920,
     minWidth: 960,
     minHeight: 640,
     title: 'TeXcellent',
+    icon: iconPath,
     autoHideMenuBar: true,
     webPreferences: {
       contextIsolation: true,
@@ -74,6 +76,14 @@ async function createWindow() {
       plugins: true,
     },
   });
+
+  if (process.platform === 'darwin' && app.dock && typeof app.dock.setIcon === 'function') {
+    try {
+      app.dock.setIcon(iconPath);
+    } catch {
+      // ignore if dock icon override is unavailable
+    }
+  }
 
   win.webContents.setWindowOpenHandler(({ url }) => {
     if (url.startsWith(baseUrl)) {
