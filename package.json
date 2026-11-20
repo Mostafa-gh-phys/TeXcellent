@@ -14,7 +14,7 @@
     "test": "tsx --test src/utils/*.test.ts",
     "verify:native": "node scripts/ensure-native-bindings.mjs",
     "build:server": "esbuild server.ts --bundle --platform=node --format=cjs --outfile=dist-server/server.cjs --external:vite",
-    "build:desktop": "npm run build && npm run build:server && electron-builder --config electron-builder.yml"
+    "build:desktop": "node scripts/ensure-desktop-icons.mjs && npm run build && npm run build:server && electron-builder --config electron-builder.yml"
   },
   "dependencies": {
     "@codemirror/autocomplete": "^6.20.4",

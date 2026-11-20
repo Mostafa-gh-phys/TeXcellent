@@ -1,6 +1,7 @@
 import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
+import { ensureDesktopIcons } from './desktop-icons-lib.mjs';
 import { buildElectronBuilderArgs, resolveReleaseTagMetadata } from './release-tag-lib.mjs';
 
 const rootDir = process.cwd();
@@ -14,6 +15,10 @@ if (platformFlags.length === 0) {
 const meta = resolveReleaseTagMetadata(process.env.RELEASE_TAG);
 
 fs.rmSync(path.join(rootDir, 'release'), { recursive: true, force: true });
+const iconManifest = ensureDesktopIcons(rootDir, 'packaging');
+console.log(
+  `[package-desktop] Prepared icons in ${path.relative(rootDir, iconManifest.outDir) || 'packaging'} (ico=${fs.statSync(iconManifest.icoPath).size}B, icns=${fs.statSync(iconManifest.icnsPath).size}B)`
+);
 
 const pkgPath = path.join(rootDir, 'package.json');
 const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf8'));
@@ -24,15 +29,23 @@ console.log(
   `[package-desktop] Packaging version=${meta.appVersion} tag=${meta.safeTag} artifactName=${meta.artifactName}`
 );
 
-const npxCmd = process.platform === 'win32' ? 'npx.cmd' : 'npx';
 const args = buildElectronBuilderArgs({
   platformFlags,
   appVersion: meta.appVersion,
   artifactName: meta.artifactName,
 });
 
-execFileSync(npxCmd, args, {
-  cwd: rootDir,
-  stdio: 'inherit',
-  shell: process.platform === 'win32',
-});
+const localCli = path.join(rootDir, 'node_modules', 'electron-builder', 'cli.js');
+if (fs.existsSync(localCli)) {
+  execFileSync(process.execPath, [localCli, ...args.slice(2)], {
+    cwd: rootDir,
+    stdio: 'inherit',
+  });
+} else {
+  const npxCmd = process.platform === 'win32' ? 'npx.cmd' : 'npx';
+  execFileSync(npxCmd, args, {
+    cwd: rootDir,
+    stdio: 'inherit',
+    shell: process.platform === 'win32',
+  });
+}

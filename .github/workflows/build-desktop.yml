@@ -94,9 +94,9 @@ jobs:
             ~/.npm
             ${{ runner.temp }}/electron-cache
             ${{ runner.temp }}/eb-cache
-          key: ${{ runner.os }}-desktop-cache-v3-${{ hashFiles('package.json', 'electron-builder.yml', 'scripts/ensure-native-bindings.mjs') }}
+          key: ${{ runner.os }}-desktop-cache-v4-${{ hashFiles('package.json', 'electron-builder.yml', 'scripts/ensure-native-bindings.mjs', 'scripts/ensure-desktop-icons.mjs') }}
           restore-keys: |
-            ${{ runner.os }}-desktop-cache-v3-
+            ${{ runner.os }}-desktop-cache-v4-
 
       - name: Install Linux AppImage build dependencies (FUSE)
         if: runner.os == 'Linux'
@@ -121,10 +121,11 @@ jobs:
           npm install --no-save --include=optional electron@34.3.0 electron-builder@26.18.0 --legacy-peer-deps --no-audit --no-fund
           node scripts/ensure-native-bindings.mjs
 
-      - name: Build frontend & Express backend assets
+      - name: Build frontend, Express backend & desktop icon assets
         run: |
           npm run build
           npm run build:server
+          node scripts/ensure-desktop-icons.mjs
 
       - name: Package installer (${{ matrix.platform_flag }})
         env:

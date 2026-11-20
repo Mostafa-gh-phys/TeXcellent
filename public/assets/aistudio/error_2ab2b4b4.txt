@@ -1,0 +1,40 @@
+Run node scripts/package-desktop.mjs --win nsis
+[package-desktop] Packaging version=1.5.0 tag=v1.5.0 artifactName=TeXcellent-v1.5.0-${arch}.${ext}
+  • electron-builder  version=26.18.0 os=10.0.26100
+  • loaded configuration  file=D:\a\TeXcellent\TeXcellent\electron-builder.yml
+  • packageManager not detected by file, falling back to environment detection  resolvedPackageManager=npm detected=D:\a\TeXcellent\TeXcellent
+  • skipped dependencies rebuild  reason=npmRebuild is set to false
+  • packaging       platform=win32 arch=x64 electron=34.3.0 appOutDir=release\win-unpacked
+  • downloaded      label=electron progress=100%
+  • downloaded electron zip extracted successfully  output=D:\a\TeXcellent\TeXcellent\release\win-unpacked
+  • searching for node modules  pm=npm searchDir=D:\a\TeXcellent\TeXcellent
+  • duplicate dependency references  dependencies=["@codemirror/language@6.13.1","@codemirror/state@6.7.6","@codemirror/view@6.43.15","@codemirror/language@6.13.1","@codemirror/state@6.7.6","@codemirror/view@6.43.15","@codemirror/state@6.7.6","@codemirror/view@6.43.15","@lezer/highlight@1.2.5","@codemirror/state@6.7.6","@codemirror/view@6.43.15","@codemirror/state@6.7.6","glob@7.2.3","brace-expansion@1.1.22","chalk@4.1.2","jsonfile@6.2.1","fs-extra@8.1.0","global-agent@3.0.0","got@11.8.6","sumchecker@3.0.1","jsonfile@6.2.1","promise-retry@2.0.1","jsonfile@6.2.1","plist@3.1.0","@malept/cross-spawn-promise@2.0.0","node-abi@4.43.0","node-api-version@0.2.1","node-gyp@12.4.0","read-binary-file-arch@1.0.6","@electron/asar@3.4.1","@malept/cross-spawn-promise@2.0.0","dir-compare@4.2.0","jsonfile@6.2.1","brace-expansion@2.1.8","plist@3.1.0","https-proxy-agent@7.0.6","fetch-blob@3.2.0","gaxios@7.3.1","ecdsa-sig-formatter@1.0.11","@types/node@22.20.5","cross-spawn@7.0.6","jsonfile@6.2.1","tmp-promise@3.0.3","@peculiar/utils@2.0.3","asn1js@3.1.0","@peculiar/asn1-schema@2.11.1","@peculiar/json-schema@1.1.12","@peculiar/utils@2.0.3","webcrypto-core@1.9.2","@jridgewell/trace-mapping@0.3.31","lightningcss@1.33.0","@emnapi/wasi-threads@1.2.3","@emnapi/core@1.11.3","@emnapi/runtime@1.11.3","@tybys/wasm-util@0.10.3","vite@8.3.8","@types/keyv@3.1.4","@types/responselike@1.0.3","@types/node@22.20.5","@types/node@22.20.5","@types/node@22.20.5","@types/node@22.20.5","vite@8.3.8","color-convert@2.0.1","@electron/asar@3.4.1","@electron/fuses@1.8.0","debug@4.4.3","jsonfile@4.0.0","global-agent@3.0.0","got@11.8.6","sumchecker@3.0.1","@electron/notarize@2.5.0","@electron/osx-sign@1.3.3","@electron/rebuild@4.2.1","@electron/universal@2.0.3","@malept/flatpak-bundler@0.4.0","@peculiar/webcrypto@1.7.2","@types/fs-extra@9.0.13","ajv@8.20.0","asn1js@3.1.0","builder-util-runtime@9.7.0","builder-util@26.16.0","dmg-builder@26.18.0","dotenv-expand@11.0.7","ejs@3.1.10","electron-publish@26.18.0","hosted-git-info@4.1.0","js-yaml@4.3.2","minimatch@10.2.6","pkijs@3.4.3","plist@3.1.0","proper-lockfile@4.1.2","resedit@1.7.2","tar@7.5.23","temp-file@3.4.0","tiny-async-pool@1.3.0","unzipper@0.12.5","which@5.0.0","pvtsutils@1.3.6","@types/debug@4.1.13","builder-util-runtime@9.7.0","chalk@4.1.2","cross-spawn@7.0.6","jsonfile@6.2.1","http-proxy-agent@7.0.2","js-yaml@4.3.2","sanitize-filename@1.6.5","source-map-support@0.5.21","temp-file@3.4.0","tiny-async-pool@1.3.0","clone-response@1.0.3","get-stream@5.2.0","keyv@4.5.4","responselike@2.0.1","ansi-styles@4.3.0","supports-color@7.2.0","string-width@4.2.3","strip-ansi@6.0.1","wrap-ansi@7.0.0","shebang-command@2.0.0","define-data-property@1.1.4","has-property-descriptors@1.0.2","brace-expansion@1.1.22","p-limit@3.1.0","app-builder-lib@26.18.0","builder-util@26.16.0","jsonfile@6.2.1","js-yaml@4.3.2","jake@10.9.4","app-builder-lib@26.18.0","builder-util-runtime@9.7.0","builder-util@26.16.0","chalk@4.1.2","dmg-builder@26.18.0","jsonfile@6.2.1","simple-update-notifier@2.0.0","yargs@17.7.3","@types/fs-extra@9.0.13","builder-util-runtime@9.7.0","builder-util@26.16.0","chalk@4.1.2","form-data@4.0.6","jsonfile@6.2.1","@electron/get@2.0.3","extract-zip@2.0.1","once@1.4.0","call-bind-apply-helpers@1.0.2","es-object-atoms@1.1.2","hasown@2.0.4","has-tostringtag@1.0.2","mime-types@2.1.35","debug@2.6.9","http-errors@2.0.1","on-finished@2.4.2","qs@6.16.2","http-errors@2.0.1","iconv-lite@0.4.24","type-is@1.6.18","debug@2.6.9","on-finished@2.4.2","call-bind-apply-helpers@1.0.2","get-intrinsic@1.3.0","get-intrinsic@1.3.0","call-bound@1.0.4","get-intrinsic@1.3.0","side-channel-map@1.0.1","debug@2.6.9","http-errors@2.0.1","on-finished@2.4.2","send@0.19.2","mime-types@2.1.35","@types/yauzl@2.10.3","get-stream@5.2.0","yauzl@2.10.0","brace-expansion@2.1.8","combined-stream@1.0.8","es-set-tostringtag@2.1.0","hasown@2.0.4","jsonfile@4.0.0","pump@3.0.4","inflight@1.0.6","brace-expansion@1.1.22","once@1.4.0","matcher@3.0.0","roarr@2.15.4","serialize-error@7.0.1","define-properties@1.2.1","@szmarczak/http-timer@4.0.6","@types/cacheable-request@6.0.3","@types/responselike@1.0.3","cacheable-request@7.0.4","decompress-response@6.0.0","http2-wrapper@1.0.3","responselike@2.0.1","lru-cache@6.0.0","once@1.4.0","filelist@1.0.6","readable-stream@2.3.8","brace-expansion@5.0.13","react-dom@19.3.1","react-dom@19.3.1","nopt@9.0.0","tar@7.5.23","asn1js@3.1.0","pvtsutils@1.3.6","end-of-stream@1.4.5","once@1.4.0","globalthis@1.0.4","truncate-utf8-bytes@1.0.2","strip-ansi@6.0.1","@isaacs/fs-minipass@4.0.1","minizlib@3.1.0","jsonfile@6.2.1","duplexer2@0.1.4","jsonfile@6.2.1","@types/node@22.20.5","tinyglobby@0.2.17","@peculiar/asn1-schema@2.11.1","@peculiar/json-schema@1.1.12","@peculiar/utils@2.0.3","asn1js@3.1.0","ansi-styles@4.3.0","string-width@4.2.3","strip-ansi@6.0.1","cliui@8.0.1","string-width@4.2.3","fd-slicer@1.1.0"]
+  • updating asar integrity executable resource  executablePath=release\win-unpacked\TeXcellent.exe
+  • default Electron icon is used  reason=application icon is not set
+  • no code signing certificate configured, signing is skipped  path=release\win-unpacked\TeXcellent.exe
+  • building        target=nsis file=release\TeXcellent-v1.5.0-x64.exe archs=x64 oneClick=false perMachine=false
+  ⨯ cannot find specified resource "build/icon.ico", nor relative to "D:\a\TeXcellent\TeXcellent\build", neither relative to project dir ("D:\a\TeXcellent\TeXcellent")
+node:internal/errors:983
+  const err = new Error(message);
+              ^
+
+Error: Command failed: npx.cmd --no-install electron-builder --config electron-builder.yml --win nsis -c.extraMetadata.version=1.5.0 -c.artifactName=TeXcellent-v1.5.0-${arch}.${ext} --publish never
+    at genericNodeError (node:internal/errors:983:15)
+    at wrappedFn (node:internal/errors:537:14)
+    at checkExecSyncError (node:child_process:916:11)
+    at execFileSync (node:child_process:952:15)
+    at file:///D:/a/TeXcellent/TeXcellent/scripts/package-desktop.mjs:34:1
+    at ModuleJob.run (node:internal/modules/esm/module_job:343:25)
+    at async onImport.tracePromise.__proto__ (node:internal/modules/esm/loader:681:26)
+    at async asyncRunEntryPointWithESMLoader (node:internal/modules/run_main:117:5) {
+  status: 1,
+  signal: null,
+  output: [ null, null, null ],
+  pid: 9432,
+  stdout: null,
+  stderr: null
+}
+
+Node.js v22.23.4
+Error: Process completed with exit code 1.
+

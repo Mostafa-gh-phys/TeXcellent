@@ -12,7 +12,7 @@ extraMetadata:
   main: electron/main.cjs
 directories:
   output: release
-  buildResources: build
+  buildResources: packaging
 files:
   - dist/**/*
   - dist-server/**/*
@@ -24,7 +24,7 @@ asarUnpack:
   - dist/**/*
   - dist-server/**/*
 linux:
-  icon: build/icons
+  icon: packaging/icons
   target:
     - target: AppImage
       arch:
@@ -32,7 +32,7 @@ linux:
   category: Office
   synopsis: Bilingual LaTeX Studio with TeX Live & MiKTeX autodetection
 win:
-  icon: build/icon.ico
+  icon: packaging/icon.ico
   target:
     - target: nsis
       arch:
@@ -43,11 +43,10 @@ win:
 nsis:
   oneClick: false
   allowToChangeInstallationDirectory: true
-  installerIcon: build/icon.ico
-  uninstallerIcon: build/icon.ico
-  installerHeaderIcon: build/icon.ico
+  installerIcon: packaging/icon.ico
+  uninstallerIcon: packaging/icon.ico
 mac:
-  icon: build/icon.icns
+  icon: packaging/icon.icns
   identity: null
   notarize: false
   hardenedRuntime: false
@@ -64,4 +63,4 @@ mac:
   category: public.app-category.productivity
 dmg:
   format: UDZO
-  icon: build/icon.icns
+  icon: packaging/icon.icns
