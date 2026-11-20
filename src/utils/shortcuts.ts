@@ -59,6 +59,13 @@ export const SHORTCUT_DEFINITIONS: ShortcutDefinition[] = [
     defaultBinding: 'Mod-,',
   },
   {
+    id: 'forwardSync',
+    label: 'Sync Source to PDF',
+    description: 'Scroll the embedded PDF viewer to the page matching the current line',
+    category: 'Workspace',
+    defaultBinding: 'Mod-Shift-j',
+  },
+  {
     id: 'triggerAutocomplete',
     label: 'Trigger Autocomplete',
     description: 'Open LaTeX commands, package options, snippets, and citation suggestions',

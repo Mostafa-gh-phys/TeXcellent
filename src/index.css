@@ -112,3 +112,60 @@
 ::-webkit-scrollbar-thumb:hover {
   background: rgba(128, 128, 128, 0.45);
 }
+
+/* PDF.js embedded TextLayer for TeXstudio-like text selection, find, & inverse sync */
+.texcellent-pdf-page {
+  position: relative;
+  margin-inline: auto;
+  background-color: #ffffff;
+  user-select: text;
+}
+
+.texcellent-pdf-page .textLayer {
+  position: absolute;
+  inset: 0;
+  overflow: clip;
+  opacity: 1;
+  line-height: 1;
+  letter-spacing: normal;
+  word-spacing: normal;
+  text-size-adjust: none;
+  transform-origin: 0 0;
+  z-index: 2;
+  --min-font-size: 1;
+  --text-scale-factor: calc(var(--total-scale-factor) * var(--min-font-size));
+  --min-font-size-inv: calc(1 / var(--min-font-size));
+}
+
+.texcellent-pdf-page .textLayer :is(span, br) {
+  color: transparent;
+  position: absolute;
+  white-space: pre;
+  cursor: text;
+  transform-origin: 0% 0%;
+  user-select: text;
+}
+
+.texcellent-pdf-page .textLayer > :not(.markedContent),
+.texcellent-pdf-page .textLayer .markedContent span:not(.markedContent) {
+  z-index: 1;
+  --font-height: 0;
+  font-size: calc(var(--text-scale-factor) * var(--font-height));
+  --scale-x: 1;
+  --rotate: 0deg;
+  transform: rotate(var(--rotate)) scaleX(var(--scale-x)) scale(var(--min-font-size-inv));
+}
+
+.texcellent-pdf-page .textLayer .markedContent {
+  display: contents;
+}
+
+.texcellent-pdf-page .textLayer ::selection {
+  background: rgba(37, 99, 235, 0.28);
+}
+
+.texcellent-pdf-page .textLayer span.texcellent-pdf-match {
+  background: rgba(245, 158, 11, 0.35);
+  border-radius: 2px;
+}
+

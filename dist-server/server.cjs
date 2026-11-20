@@ -135855,6 +135855,27 @@ var PORT = Number(process.env.PORT) || 3e3;
 var compiledPdfs = /* @__PURE__ */ new Map();
 var compiledArtifacts = /* @__PURE__ */ new Map();
 var oauthSessions = /* @__PURE__ */ new Map();
+var MAX_COMPILED_CACHE = 25;
+var cachedFontBuffers = /* @__PURE__ */ new Map();
+function pruneCompiledCaches() {
+  const cutoff = Date.now() - 30 * 60 * 1e3;
+  for (const [k, v] of compiledPdfs.entries()) {
+    if (v.createdAt < cutoff) compiledPdfs.delete(k);
+  }
+  for (const [k, v] of compiledArtifacts.entries()) {
+    if (v.createdAt < cutoff) compiledArtifacts.delete(k);
+  }
+  while (compiledPdfs.size > MAX_COMPILED_CACHE) {
+    const oldest = compiledPdfs.keys().next().value;
+    if (oldest !== void 0) compiledPdfs.delete(oldest);
+    else break;
+  }
+  while (compiledArtifacts.size > MAX_COMPILED_CACHE) {
+    const oldest = compiledArtifacts.keys().next().value;
+    if (oldest !== void 0) compiledArtifacts.delete(oldest);
+    else break;
+  }
+}
 function storeCompileArtifacts(compileId, jobBase, entries) {
   const fileMap = /* @__PURE__ */ new Map();
   const summary = [];
@@ -135877,13 +135898,7 @@ function storeCompileArtifacts(compileId, jobBase, entries) {
     files: fileMap,
     createdAt: Date.now()
   });
-  const cutoff = Date.now() - 30 * 60 * 1e3;
-  for (const [k, v] of compiledPdfs.entries()) {
-    if (v.createdAt < cutoff) compiledPdfs.delete(k);
-  }
-  for (const [k, v] of compiledArtifacts.entries()) {
-    if (v.createdAt < cutoff) compiledArtifacts.delete(k);
-  }
+  pruneCompiledCaches();
   return summary;
 }
 var RTL_CHAR_RE = /[\u0600-\u06FF\u0750-\u077F\u08A0-\u08FF\uFB50-\uFDFF\uFE70-\uFEFF]/;
@@ -135892,10 +135907,18 @@ function toWinAnsiSafe(text) {
 }
 async function readFirstExistingFont(candidates) {
   for (const fontPath of candidates) {
+    if (cachedFontBuffers.has(fontPath)) {
+      const hit = cachedFontBuffers.get(fontPath);
+      if (hit) return hit;
+      continue;
+    }
     try {
       const buf = await import_promises3.default.readFile(fontPath);
-      return new Uint8Array(buf);
+      const view = new Uint8Array(buf);
+      cachedFontBuffers.set(fontPath, view);
+      return view;
     } catch {
+      cachedFontBuffers.set(fontPath, null);
     }
   }
   return null;
@@ -136795,6 +136818,7 @@ ${dotLog.slice(-4e3)}`);
               filename: pdfName,
               createdAt: Date.now()
             });
+            pruneCompiledCaches();
             const finalDiagnostics = parsedDiagnostics.length > 0 ? parsedDiagnostics : [
               {
                 level: "info",

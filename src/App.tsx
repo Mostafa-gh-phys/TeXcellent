@@ -53,8 +53,10 @@ import {
   resolveDocumentDisplayTitle,
 } from './utils/documentTitle';
 import { markdownToLatex } from './utils/latexMarkdown';
+import { findSearchExcerptForSourceLine, findSourceLineForPdfText } from './utils/pdfSync';
 import { LatexCodeEditor } from './components/LatexCodeEditor';
 import { PdfPreviewPane } from './components/PdfPreviewPane';
+import type { PdfForwardSyncRequest } from './components/PdfBinaryCanvasViewer';
 import { LogDrawer, LogDrawerTab } from './components/LogDrawer';
 import { SmartAiModal } from './components/SmartAiModal';
 import { SyncModal } from './components/SyncModal';
@@ -231,16 +233,20 @@ export default function App() {
   const [dirtyFileIds, setDirtyFileIds] = useState<Set<string>>(() => new Set());
   const [pendingCloseFileId, setPendingCloseFileId] = useState<string | null>(null);
   const [saveNotice, setSaveNotice] = useState<string>('');
+  const [forwardSyncRequest, setForwardSyncRequest] = useState<PdfForwardSyncRequest | null>(null);
 
   const editorActionsRef = useRef<{
     insertAtCursor: (snippet: string) => void;
     jumpToLine?: (lineNumber: number) => void;
+    getCurrentLine?: () => number;
   } | null>(null);
   const splitContainerRef = useRef<HTMLDivElement | null>(null);
   const isResizingRef = useRef(false);
   const sidebarFolderInputRef = useRef<HTMLInputElement | null>(null);
   const lastTargetFileIdRef = useRef<string | undefined>(undefined);
   const saveNoticeTimerRef = useRef<number | null>(null);
+  const compileAbortRef = useRef<AbortController | null>(null);
+  const compileSeqRef = useRef(0);
 
   const theme = EDITOR_THEMES[themeId] || EDITOR_THEMES['github-light'];
   const editorFont = EDITOR_FONTS[editorFontId] || EDITOR_FONTS.jetbrains;
@@ -290,16 +296,36 @@ export default function App() {
     [openTabIds.length, dirtyFileIds, forceCloseFileTab]
   );
 
-  // Persist workspace state
-  useEffect(() => {
+  // Debounced workspace persistence (avoids synchronous JSON.stringify of large binary assets per keystroke)
+  const latestPersistenceRef = useRef({ projects, activeProjectId, project });
+  latestPersistenceRef.current = { projects, activeProjectId, project };
+
+  const flushProjectsToStorage = useCallback(() => {
     try {
-      localStorage.setItem(STORAGE_PROJECTS_KEY, JSON.stringify(projects));
-      localStorage.setItem(STORAGE_ACTIVE_PROJECT_KEY, JSON.stringify(activeProjectId));
-      localStorage.setItem(STORAGE_PROJECT_KEY, JSON.stringify(project));
+      const snap = latestPersistenceRef.current;
+      localStorage.setItem(STORAGE_PROJECTS_KEY, JSON.stringify(snap.projects));
+      localStorage.setItem(STORAGE_ACTIVE_PROJECT_KEY, JSON.stringify(snap.activeProjectId));
+      localStorage.setItem(STORAGE_PROJECT_KEY, JSON.stringify(snap.project));
     } catch {
       // ignore storage quota errors
     }
-  }, [projects, activeProjectId, project]);
+  }, []);
+
+  useEffect(() => {
+    const timer = window.setTimeout(flushProjectsToStorage, 400);
+    return () => window.clearTimeout(timer);
+  }, [projects, activeProjectId, project, flushProjectsToStorage]);
+
+  useEffect(() => {
+    if (isExternalPreviewWindow) return;
+    const onHide = () => flushProjectsToStorage();
+    window.addEventListener('pagehide', onHide);
+    window.addEventListener('beforeunload', onHide);
+    return () => {
+      window.removeEventListener('pagehide', onHide);
+      window.removeEventListener('beforeunload', onHide);
+    };
+  }, [isExternalPreviewWindow, flushProjectsToStorage]);
 
   useEffect(() => {
     try {
@@ -365,10 +391,11 @@ export default function App() {
     }
   }, [shortcuts]);
 
-  // Sync external preview window via BroadcastChannel
+  // Sync external preview window via debounced BroadcastChannel
   useEffect(() => {
     if (typeof BroadcastChannel === 'undefined') return;
     const channel = new BroadcastChannel('texcellent-preview');
+    let syncTimer: number | null = null;
     if (isExternalPreviewWindow) {
       channel.onmessage = (e) => {
         if (e.data?.type === 'SYNC_PREVIEW') {
@@ -389,17 +416,27 @@ export default function App() {
           });
         }
       };
-      channel.postMessage({
-        type: 'SYNC_PREVIEW',
-        project,
-        compileResult,
-        themeId,
-      });
+      syncTimer = window.setTimeout(() => {
+        channel.postMessage({
+          type: 'SYNC_PREVIEW',
+          project,
+          compileResult,
+          themeId,
+        });
+      }, 150);
     }
-    return () => channel.close();
+    return () => {
+      if (syncTimer) window.clearTimeout(syncTimer);
+      channel.close();
+    };
   }, [isExternalPreviewWindow, project, compileResult, themeId]);
 
   const handleCompile = useCallback(async (overrideMode?: CompilerMode) => {
+    compileAbortRef.current?.abort();
+    const controller = new AbortController();
+    compileAbortRef.current = controller;
+    const seq = ++compileSeqRef.current;
+
     const baseMode = overrideMode || compilerSettings.compilerMode;
     const effectiveMode = overrideMode
       ? overrideMode
@@ -411,6 +448,7 @@ export default function App() {
     try {
       const res = await fetch('/api/compile', {
         method: 'POST',
+        signal: controller.signal,
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           projectName: documentDisplayTitle,
@@ -431,6 +469,7 @@ export default function App() {
         }),
       });
       const data = (await res.json()) as CompileResult;
+      if (compileSeqRef.current !== seq) return;
       setCompileResult(data);
       const hasBugDiagnostics = (data.diagnostics || []).some((d) => d.level === 'error');
       if (!data.success || hasBugDiagnostics) {
@@ -438,9 +477,12 @@ export default function App() {
         setShowLog(true);
       }
     } catch (err) {
+      if (err instanceof DOMException && err.name === 'AbortError') return;
       console.error('Compile failed:', err);
     } finally {
-      setIsCompiling(false);
+      if (compileSeqRef.current === seq) {
+        setIsCompiling(false);
+      }
     }
   }, [project, compileTargetFile, mainFile, documentDisplayTitle, compilerSettings]);
 
@@ -618,11 +660,48 @@ export default function App() {
     [activeFile, showSaveFeedback]
   );
 
+  const handleInverseSync = useCallback(
+    (clickedText: string) => {
+      const match = findSourceLineForPdfText(clickedText, project.files, activeFile?.id);
+      if (!match) return;
+      if (match.fileId !== activeFile?.id) {
+        openFileTab(match.fileId);
+      }
+      setMobilePane('editor');
+      window.setTimeout(() => {
+        editorActionsRef.current?.jumpToLine?.(match.line);
+      }, match.fileId !== activeFile?.id ? 40 : 0);
+      showSaveFeedback(`Jumped to ${match.fileName}:${match.line}`);
+    },
+    [project.files, activeFile?.id, openFileTab, showSaveFeedback]
+  );
+
+  const handleForwardSync = useCallback(() => {
+    if (!activeFile) return;
+    const currentLine = editorActionsRef.current?.getCurrentLine?.() || cursorInfo.line || 1;
+    const excerpt = findSearchExcerptForSourceLine(activeFile.content, currentLine);
+    if (!excerpt) {
+      showSaveFeedback(`Line ${currentLine} has no syncable PDF text`);
+      return;
+    }
+    setPreviewMode('beside');
+    setMobilePane('preview');
+    setForwardSyncRequest({ text: excerpt, nonce: Date.now() });
+    showSaveFeedback(`Synced ${activeFile.name}:${currentLine} → PDF`);
+  }, [activeFile, cursorInfo.line, showSaveFeedback]);
+
   const triggerWorkspaceShortcut = useCallback(
     (
       action: Extract<
         ShortcutActionId,
-        'compile' | 'saveFile' | 'togglePreview' | 'toggleSidebar' | 'toggleLog' | 'openFiles' | 'openSettings'
+        | 'compile'
+        | 'saveFile'
+        | 'togglePreview'
+        | 'toggleSidebar'
+        | 'toggleLog'
+        | 'openFiles'
+        | 'openSettings'
+        | 'forwardSync'
       >
     ) => {
       switch (action) {
@@ -647,9 +726,12 @@ export default function App() {
         case 'openSettings':
           setActiveModal((prev) => (prev === 'settings' ? null : 'settings'));
           break;
+        case 'forwardSync':
+          handleForwardSync();
+          break;
       }
     },
-    [handleCompile, handleSaveFile]
+    [handleCompile, handleSaveFile, handleForwardSync]
   );
 
   // Global keyboard shortcut listener (skips while recording new shortcuts in Settings)
@@ -661,16 +743,32 @@ export default function App() {
     const onKeyDown = (e: KeyboardEvent) => {
       if (document.querySelector('[data-shortcut-recording="true"]')) return;
 
-      const target = e.target as HTMLElement | null;
-      const inCodeMirror = Boolean(target?.closest('.cm-editor'));
+      const target = e.target;
+      const inCodeMirror = target instanceof Element ? Boolean(target.closest('.cm-editor')) : false;
       if (inCodeMirror) return;
 
       const actions: Array<
         Extract<
           ShortcutActionId,
-          'compile' | 'saveFile' | 'togglePreview' | 'toggleSidebar' | 'toggleLog' | 'openFiles' | 'openSettings'
+          | 'compile'
+          | 'saveFile'
+          | 'togglePreview'
+          | 'toggleSidebar'
+          | 'toggleLog'
+          | 'openFiles'
+          | 'openSettings'
+          | 'forwardSync'
         >
-      > = ['compile', 'saveFile', 'togglePreview', 'toggleSidebar', 'toggleLog', 'openFiles', 'openSettings'];
+      > = [
+        'compile',
+        'saveFile',
+        'togglePreview',
+        'toggleSidebar',
+        'toggleLog',
+        'openFiles',
+        'openSettings',
+        'forwardSync',
+      ];
 
       for (const actionId of actions) {
         if (matchesShortcutEvent(e, shortcuts[actionId], isMac)) {
@@ -1793,6 +1891,8 @@ Write your document here.
                   setCompilerSettings((prev) => ({ ...prev, compilerMode: 'xelatex' }));
                   handleCompile('xelatex');
                 }}
+                onInverseSync={handleInverseSync}
+                forwardSyncRequest={forwardSyncRequest}
               />
             </section>
           )}
@@ -1907,6 +2007,8 @@ Write your document here.
                   setCompilerSettings((prev) => ({ ...prev, compilerMode: 'xelatex' }));
                   handleCompile('xelatex');
                 }}
+                onInverseSync={handleInverseSync}
+                forwardSyncRequest={forwardSyncRequest}
                 isExternalWindow
               />
             </div>

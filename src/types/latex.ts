@@ -164,6 +164,7 @@ export type ShortcutActionId =
   | 'toggleLog'
   | 'openFiles'
   | 'openSettings'
+  | 'forwardSync'
   | 'triggerAutocomplete'
   | 'insertBold'
   | 'insertItalic'

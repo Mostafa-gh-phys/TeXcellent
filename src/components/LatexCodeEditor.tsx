@@ -42,7 +42,14 @@ const externalSyncAnnotation = Annotation.define<boolean>();
 
 type WorkspaceShortcutAction = Extract<
   ShortcutActionId,
-  'compile' | 'saveFile' | 'togglePreview' | 'toggleSidebar' | 'toggleLog' | 'openFiles' | 'openSettings'
+  | 'compile'
+  | 'saveFile'
+  | 'togglePreview'
+  | 'toggleSidebar'
+  | 'toggleLog'
+  | 'openFiles'
+  | 'openSettings'
+  | 'forwardSync'
 >;
 
 interface LatexCodeEditorProps {
@@ -60,7 +67,40 @@ interface LatexCodeEditorProps {
   editorRefOut?: React.MutableRefObject<{
     insertAtCursor: (snippet: string) => void;
     jumpToLine?: (lineNumber: number) => void;
+    getCurrentLine?: () => number;
   } | null>;
+}
+
+interface CachedLineAnalysis {
+  dir: 'ltr' | 'rtl';
+  bidiSpans: ReturnType<typeof computeBidiSpans>;
+  tokens: ReturnType<typeof tokenizeLatexLine>;
+}
+
+const MAX_LINE_ANALYSIS_CACHE = 1500;
+const lineAnalysisCache = new Map<string, CachedLineAnalysis>();
+
+function getCachedLineAnalysis(text: string, directionMode: DirectionMode): CachedLineAnalysis {
+  const key = `${directionMode}\0${text}`;
+  const existing = lineAnalysisCache.get(key);
+  if (existing) {
+    // Refresh LRU order
+    lineAnalysisCache.delete(key);
+    lineAnalysisCache.set(key, existing);
+    return existing;
+  }
+  const dir = detectLineDirection(text, directionMode);
+  const computed: CachedLineAnalysis = {
+    dir,
+    bidiSpans: computeBidiSpans(text, dir),
+    tokens: tokenizeLatexLine(text),
+  };
+  if (lineAnalysisCache.size >= MAX_LINE_ANALYSIS_CACHE) {
+    const oldestKey = lineAnalysisCache.keys().next().value;
+    if (oldestKey !== undefined) lineAnalysisCache.delete(oldestKey);
+  }
+  lineAnalysisCache.set(key, computed);
+  return computed;
 }
 
 function buildBidiDecorations(
@@ -79,7 +119,7 @@ function buildBidiDecorations(
     let pos = from;
     while (pos <= to) {
       const line = view.state.doc.lineAt(pos);
-      const dir = detectLineDirection(line.text, directionMode);
+      const { dir, bidiSpans, tokens } = getCachedLineAnalysis(line.text, directionMode);
       allDecos.push({
         kind: 'line',
         from: line.from,
@@ -88,7 +128,6 @@ function buildBidiDecorations(
       });
 
       // 1. Official CodeMirror BiDi isolation ranges (rendered in DOM AND fed to bidiIsolatedRanges)
-      const bidiSpans = computeBidiSpans(line.text, dir);
       for (const span of bidiSpans) {
         if (span.from >= span.to) continue;
         const isoDeco = Decoration.mark({
@@ -110,7 +149,6 @@ function buildBidiDecorations(
       }
 
       // 2. Syntax color tokens (pure styling, no CSS unicode-bidi interference)
-      const tokens = tokenizeLatexLine(line.text);
       for (const tok of tokens) {
         if (tok.from >= tok.to || tok.type === 'whitespace') continue;
         let color = theme.editor.fg;
@@ -313,6 +351,7 @@ export const LatexCodeEditor: React.FC<LatexCodeEditorProps> = ({
       'toggleLog',
       'openFiles',
       'openSettings',
+      'forwardSync',
     ];
     const customBindings: KeyBinding[] = [];
     for (const actionId of workspaceActions) {
@@ -520,6 +559,7 @@ export const LatexCodeEditor: React.FC<LatexCodeEditorProps> = ({
           });
           view.focus();
         },
+        getCurrentLine: () => view.state.doc.lineAt(view.state.selection.main.head).number,
       };
     }
 

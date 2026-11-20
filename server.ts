@@ -59,6 +59,29 @@ const compiledArtifacts = new Map<
 >();
 const oauthSessions = new Map<string, { accessToken: string; username: string }>();
 
+const MAX_COMPILED_CACHE = 25;
+const cachedFontBuffers = new Map<string, Uint8Array | null>();
+
+function pruneCompiledCaches() {
+  const cutoff = Date.now() - 30 * 60 * 1000;
+  for (const [k, v] of compiledPdfs.entries()) {
+    if (v.createdAt < cutoff) compiledPdfs.delete(k);
+  }
+  for (const [k, v] of compiledArtifacts.entries()) {
+    if (v.createdAt < cutoff) compiledArtifacts.delete(k);
+  }
+  while (compiledPdfs.size > MAX_COMPILED_CACHE) {
+    const oldest = compiledPdfs.keys().next().value;
+    if (oldest !== undefined) compiledPdfs.delete(oldest);
+    else break;
+  }
+  while (compiledArtifacts.size > MAX_COMPILED_CACHE) {
+    const oldest = compiledArtifacts.keys().next().value;
+    if (oldest !== undefined) compiledArtifacts.delete(oldest);
+    else break;
+  }
+}
+
 function storeCompileArtifacts(
   compileId: string,
   jobBase: string,
@@ -85,15 +108,7 @@ function storeCompileArtifacts(
     files: fileMap,
     createdAt: Date.now(),
   });
-
-  // Prune entries older than 30 minutes
-  const cutoff = Date.now() - 30 * 60 * 1000;
-  for (const [k, v] of compiledPdfs.entries()) {
-    if (v.createdAt < cutoff) compiledPdfs.delete(k);
-  }
-  for (const [k, v] of compiledArtifacts.entries()) {
-    if (v.createdAt < cutoff) compiledArtifacts.delete(k);
-  }
+  pruneCompiledCaches();
   return summary;
 }
 
@@ -107,11 +122,18 @@ function toWinAnsiSafe(text: string): string {
 
 async function readFirstExistingFont(candidates: string[]): Promise<Uint8Array | null> {
   for (const fontPath of candidates) {
+    if (cachedFontBuffers.has(fontPath)) {
+      const hit = cachedFontBuffers.get(fontPath);
+      if (hit) return hit;
+      continue;
+    }
     try {
       const buf = await fs.readFile(fontPath);
-      return new Uint8Array(buf);
+      const view = new Uint8Array(buf);
+      cachedFontBuffers.set(fontPath, view);
+      return view;
     } catch {
-      // try next path
+      cachedFontBuffers.set(fontPath, null);
     }
   }
   return null;
@@ -1233,6 +1255,7 @@ async function startServer() {
               filename: pdfName,
               createdAt: Date.now(),
             });
+            pruneCompiledCaches();
             const finalDiagnostics =
               parsedDiagnostics.length > 0
                 ? parsedDiagnostics
