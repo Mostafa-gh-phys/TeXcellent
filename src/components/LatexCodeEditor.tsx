@@ -64,9 +64,10 @@ interface LatexCodeEditorProps {
   onTriggerWorkspaceShortcut?: (action: WorkspaceShortcutAction) => void;
   onCursorInfo?: (info: { line: number; col: number; detectedDir: 'ltr' | 'rtl' }) => void;
   onScriptDetected?: (script: 'ltr' | 'rtl') => void;
+  onClickLine?: (info: { line: number; col: number }) => void;
   editorRefOut?: React.MutableRefObject<{
     insertAtCursor: (snippet: string) => void;
-    jumpToLine?: (lineNumber: number) => void;
+    jumpToLine?: (lineNumber: number, colNumber?: number, options?: { focus?: boolean }) => void;
     getCurrentLine?: () => number;
   } | null>;
 }
@@ -294,6 +295,7 @@ export const LatexCodeEditor: React.FC<LatexCodeEditorProps> = ({
   onTriggerWorkspaceShortcut,
   onCursorInfo,
   onScriptDetected,
+  onClickLine,
   editorRefOut,
 }) => {
   const containerRef = useRef<HTMLDivElement | null>(null);
@@ -314,6 +316,7 @@ export const LatexCodeEditor: React.FC<LatexCodeEditorProps> = ({
     onTriggerWorkspaceShortcut,
     onCursorInfo,
     onScriptDetected,
+    onClickLine,
   });
   latestProps.current = {
     onChange,
@@ -326,6 +329,7 @@ export const LatexCodeEditor: React.FC<LatexCodeEditorProps> = ({
     onTriggerWorkspaceShortcut,
     onCursorInfo,
     onScriptDetected,
+    onClickLine,
   };
 
   const wrapSelectionWith = (view: EditorView, prefix: string, suffix: string) => {
@@ -531,6 +535,18 @@ export const LatexCodeEditor: React.FC<LatexCodeEditorProps> = ({
             });
           }
         }),
+        EditorView.domEventHandlers({
+          click: (_event, view) => {
+            const sel = view.state.selection.main;
+            if (!sel.empty) return false;
+            const lineObj = view.state.doc.lineAt(sel.head);
+            latestProps.current.onClickLine?.({
+              line: lineObj.number,
+              col: sel.head - lineObj.from + 1,
+            });
+            return false;
+          },
+        }),
       ],
     });
 
@@ -550,14 +566,18 @@ export const LatexCodeEditor: React.FC<LatexCodeEditorProps> = ({
           });
           view.focus();
         },
-        jumpToLine: (lineNumber: number) => {
+        jumpToLine: (lineNumber: number, colNumber?: number, options?: { focus?: boolean }) => {
           const clamped = Math.max(1, Math.min(view.state.doc.lines, lineNumber));
           const line = view.state.doc.line(clamped);
+          const colOffset = Math.max(0, (colNumber || 1) - 1);
+          const targetPos = Math.min(line.to, line.from + colOffset);
           view.dispatch({
-            selection: { anchor: line.from },
-            effects: EditorView.scrollIntoView(line.from, { y: 'center' }),
+            selection: { anchor: targetPos },
+            effects: EditorView.scrollIntoView(targetPos, { y: 'center' }),
           });
-          view.focus();
+          if (options?.focus !== false) {
+            view.focus();
+          }
         },
         getCurrentLine: () => view.state.doc.lineAt(view.state.selection.main.head).number,
       };

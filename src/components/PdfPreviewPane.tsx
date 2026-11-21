@@ -32,7 +32,7 @@ interface PdfPreviewPaneProps {
   onRecompile?: () => void;
   onOpenLog?: () => void;
   onSwitchToXelatex?: () => void;
-  onInverseSync?: (clickedText: string) => void;
+  onInverseSync?: (clickedText: string, clickedWord?: string) => void;
   forwardSyncRequest?: PdfForwardSyncRequest | null;
   isExternalWindow?: boolean;
 }

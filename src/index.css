@@ -169,3 +169,24 @@
   border-radius: 2px;
 }
 
+@keyframes texcellent-sync-pulse {
+  0% {
+    background: rgba(59, 130, 246, 0.38);
+    box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.35);
+  }
+  70% {
+    background: rgba(59, 130, 246, 0.22);
+    box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.16);
+  }
+  100% {
+    background: transparent;
+    box-shadow: none;
+  }
+}
+
+.texcellent-pdf-page .textLayer span.texcellent-pdf-sync-highlight {
+  border-radius: 2px;
+  animation: texcellent-sync-pulse 1.8s ease-out forwards;
+}
+
+

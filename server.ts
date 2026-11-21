@@ -32,6 +32,7 @@ import {
   parseNativeTexDiagnostics,
   sanitizeTexChildEnv,
 } from './src/utils/texEnv';
+import { shouldIncludeAppPublishFile } from './src/utils/appPublishFilter';
 import type {
   BibliographyTool,
   CompileGeneratedFile,
@@ -2007,7 +2008,7 @@ async function startServer() {
       }
 
       const rootDir = process.cwd();
-      const skipDirs = new Set([
+      const skipWalkDirs = new Set([
         'node_modules',
         'dist',
         'dist-server',
@@ -2024,12 +2025,25 @@ async function startServer() {
         for (const entry of entries) {
           const full = path.join(dir, entry.name);
           const rel = path.relative(rootDir, full).replace(/\\/g, '/');
-          if (skipDirs.has(entry.name) || skipDirs.has(rel)) continue;
-          if (entry.name.startsWith('.env') && entry.name !== '.env.example') continue;
-          if (entry.name === '.DS_Store' || entry.name === 'Thumbs.db' || entry.name === 'package-lock.json') continue;
+          if (skipWalkDirs.has(entry.name) || skipWalkDirs.has(rel)) continue;
           if (entry.isDirectory()) {
-            await walkDir(full);
-          } else if (entry.isFile()) {
+            if (
+              rel === '.github' ||
+              rel.startsWith('.github/workflows') ||
+              rel === 'src' ||
+              rel.startsWith('src/') ||
+              rel === 'scripts' ||
+              rel.startsWith('scripts/') ||
+              rel === 'electron' ||
+              rel.startsWith('electron/') ||
+              rel === 'packaging' ||
+              rel.startsWith('packaging/') ||
+              rel === 'public' ||
+              rel.startsWith('public/')
+            ) {
+              await walkDir(full);
+            }
+          } else if (entry.isFile() && shouldIncludeAppPublishFile(rel)) {
             const buf = await fs.readFile(full);
             collected.push({ relPath: rel, contentBase64: buf.toString('base64') });
           }

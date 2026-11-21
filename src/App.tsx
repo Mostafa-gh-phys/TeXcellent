@@ -53,7 +53,10 @@ import {
   resolveDocumentDisplayTitle,
 } from './utils/documentTitle';
 import { markdownToLatex } from './utils/latexMarkdown';
-import { findSearchExcerptForSourceLine, findSourceLineForPdfText } from './utils/pdfSync';
+import {
+  findForwardSyncTarget,
+  findSourceLineForPdfText,
+} from './utils/pdfSync';
 import { LatexCodeEditor } from './components/LatexCodeEditor';
 import { PdfPreviewPane } from './components/PdfPreviewPane';
 import type { PdfForwardSyncRequest } from './components/PdfBinaryCanvasViewer';
@@ -237,7 +240,7 @@ export default function App() {
 
   const editorActionsRef = useRef<{
     insertAtCursor: (snippet: string) => void;
-    jumpToLine?: (lineNumber: number) => void;
+    jumpToLine?: (lineNumber: number, colNumber?: number, options?: { focus?: boolean }) => void;
     getCurrentLine?: () => number;
   } | null>(null);
   const splitContainerRef = useRef<HTMLDivElement | null>(null);
@@ -661,34 +664,55 @@ export default function App() {
   );
 
   const handleInverseSync = useCallback(
-    (clickedText: string) => {
-      const match = findSourceLineForPdfText(clickedText, project.files, activeFile?.id);
+    (clickedText: string, clickedWord?: string) => {
+      const match = findSourceLineForPdfText(clickedText, project.files, activeFile?.id, clickedWord);
       if (!match) return;
       if (match.fileId !== activeFile?.id) {
         openFileTab(match.fileId);
       }
       setMobilePane('editor');
       window.setTimeout(() => {
-        editorActionsRef.current?.jumpToLine?.(match.line);
+        editorActionsRef.current?.jumpToLine?.(match.line, match.col, { focus: false });
       }, match.fileId !== activeFile?.id ? 40 : 0);
-      showSaveFeedback(`Jumped to ${match.fileName}:${match.line}`);
     },
-    [project.files, activeFile?.id, openFileTab, showSaveFeedback]
+    [project.files, activeFile?.id, openFileTab]
+  );
+
+  const handleEditorClickLine = useCallback(
+    ({ line, col }: { line: number; col: number }) => {
+      if (!activeFile || previewMode !== 'beside' || !compileResult?.pdfUrl) return;
+      const target = findForwardSyncTarget(activeFile.content, line, col, {
+        allowNeighborFallback: false,
+      });
+      if (!target) return;
+      setForwardSyncRequest({
+        text: target.lineExcerpt,
+        anchorText: target.anchorText,
+        nonce: Date.now(),
+      });
+    },
+    [activeFile, previewMode, compileResult?.pdfUrl]
   );
 
   const handleForwardSync = useCallback(() => {
     if (!activeFile) return;
     const currentLine = editorActionsRef.current?.getCurrentLine?.() || cursorInfo.line || 1;
-    const excerpt = findSearchExcerptForSourceLine(activeFile.content, currentLine);
-    if (!excerpt) {
+    const target = findForwardSyncTarget(activeFile.content, currentLine, cursorInfo.col, {
+      allowNeighborFallback: true,
+    });
+    if (!target) {
       showSaveFeedback(`Line ${currentLine} has no syncable PDF text`);
       return;
     }
     setPreviewMode('beside');
     setMobilePane('preview');
-    setForwardSyncRequest({ text: excerpt, nonce: Date.now() });
+    setForwardSyncRequest({
+      text: target.lineExcerpt,
+      anchorText: target.anchorText,
+      nonce: Date.now(),
+    });
     showSaveFeedback(`Synced ${activeFile.name}:${currentLine} → PDF`);
-  }, [activeFile, cursorInfo.line, showSaveFeedback]);
+  }, [activeFile, cursorInfo.line, cursorInfo.col, showSaveFeedback]);
 
   const triggerWorkspaceShortcut = useCallback(
     (
@@ -1718,6 +1742,7 @@ Write your document here.
                     onTriggerWorkspaceShortcut={triggerWorkspaceShortcut}
                     onCursorInfo={setCursorInfo}
                     onScriptDetected={setKeyboardScript}
+                    onClickLine={handleEditorClickLine}
                     editorRefOut={editorActionsRef}
                   />
                 )

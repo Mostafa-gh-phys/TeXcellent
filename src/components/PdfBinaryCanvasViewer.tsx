@@ -22,6 +22,7 @@ export interface PdfJumpRequest {
 
 export interface PdfForwardSyncRequest {
   text: string;
+  anchorText?: string;
   nonce: number;
 }
 
@@ -37,7 +38,7 @@ interface PdfBinaryCanvasViewerProps {
   onPageMetricsChange?: (metrics: { currentPage: number; pageCount: number }) => void;
   onZoomChange?: (nextZoom: number) => void;
   onSearchMatchesChange?: (matchCount: number) => void;
-  onInverseSync?: (clickedText: string) => void;
+  onInverseSync?: (clickedText: string, clickedWord?: string) => void;
   onSwitchToNative?: () => void;
 }
 
@@ -539,37 +540,104 @@ export const PdfBinaryCanvasViewer: React.FC<PdfBinaryCanvasViewerProps> = ({
     }
   }, [jumpRequest]);
 
-  // Forward Sync: scroll PDF smoothly to the page containing the source line excerpt
+  // Forward Sync: scroll PDF smoothly to the exact matching TextLayer span (falling back to page)
   useEffect(() => {
     if (!forwardSyncRequest || !forwardSyncRequest.text.trim()) return;
-    const normTarget = normalizeSyncText(forwardSyncRequest.text);
-    if (!normTarget) return;
-    const tokens = normTarget.split(' ').filter((t) => t.length >= 2);
-    if (tokens.length === 0) return;
+    const normLine = normalizeSyncText(forwardSyncRequest.text);
+    const normAnchor = normalizeSyncText(forwardSyncRequest.anchorText || '');
+    if (!normLine && !normAnchor) return;
+
+    const anchorTokens = normAnchor.split(' ').filter((t) => t.length >= 2);
+    const lineTokens = normLine.split(' ').filter((t) => t.length >= 2);
+    if (anchorTokens.length === 0 && lineTokens.length === 0) return;
 
     let bestPage: PageEntry | null = null;
-    let bestScore = 0;
+    let bestPageScore = 0;
 
     for (const entry of pageEntriesRef.current) {
       if (!entry.normText) continue;
       let score = 0;
-      if (entry.normText.includes(normTarget)) score += 100;
-      for (const tok of tokens) {
-        if (entry.normText.includes(tok)) score += 12;
+      if (normAnchor.length >= 4 && entry.normText.includes(normAnchor)) score += 140;
+      if (normLine.length >= 4 && entry.normText.includes(normLine)) score += 120;
+      for (const tok of anchorTokens) {
+        if (entry.normText.includes(tok)) score += 20;
       }
-      if (score > bestScore) {
-        bestScore = score;
+      for (const tok of lineTokens) {
+        if (entry.normText.includes(tok)) score += 10;
+      }
+      if (score > bestPageScore) {
+        bestPageScore = score;
         bestPage = entry;
       }
     }
 
-    if (bestPage && bestScore >= 12) {
-      bestPage.wrapper.scrollIntoView({ behavior: 'smooth', block: 'center' });
-      latestCallbacksRef.current.onPageMetricsChange?.({
-        currentPage: bestPage.pageNum,
-        pageCount: pageEntriesRef.current.length,
-      });
+    if (!bestPage || bestPageScore < 12) return;
+
+    // Clear any previous mutual-sync highlight
+    for (const entry of pageEntriesRef.current) {
+      entry.textLayerDiv
+        .querySelectorAll('.texcellent-pdf-sync-highlight')
+        .forEach((el) => el.classList.remove('texcellent-pdf-sync-highlight'));
     }
+
+    // Find the exact best matching span inside that page's TextLayer
+    let bestSpan: HTMLElement | null = null;
+    let bestSpanScore = 0;
+    const spans = Array.from(bestPage.textLayerDiv.querySelectorAll('span')) as HTMLElement[];
+
+    for (let i = 0; i < spans.length; i++) {
+      const spanEl = spans[i];
+      const spanNorm = normalizeSyncText(spanEl.textContent || '');
+      if (!spanNorm) continue;
+
+      const combinedNorm =
+        i + 1 < spans.length
+          ? `${spanNorm} ${normalizeSyncText(spans[i + 1].textContent || '')}`.trim()
+          : spanNorm;
+
+      let score = 0;
+      if (normAnchor.length >= 3) {
+        if (spanNorm.includes(normAnchor)) score += 180;
+        else if (normAnchor.includes(spanNorm) && spanNorm.length >= 3) score += 120;
+        else if (combinedNorm.includes(normAnchor)) score += 110;
+      }
+      if (normLine.length >= 4) {
+        if (spanNorm.includes(normLine)) score += 140;
+        else if (normLine.includes(spanNorm) && spanNorm.length >= 4) score += 80;
+      }
+      for (const tok of anchorTokens) {
+        if (spanNorm.includes(tok)) score += 35;
+      }
+      for (const tok of lineTokens) {
+        if (spanNorm.includes(tok)) score += 12;
+      }
+
+      if (score > bestSpanScore) {
+        bestSpanScore = score;
+        bestSpan = spanEl;
+      }
+    }
+
+    let highlightTimer: number | undefined;
+    if (bestSpan && bestSpanScore >= 20) {
+      bestSpan.classList.add('texcellent-pdf-sync-highlight');
+      bestSpan.scrollIntoView({ behavior: 'smooth', block: 'center', inline: 'nearest' });
+      const targetSpan = bestSpan;
+      highlightTimer = window.setTimeout(() => {
+        targetSpan.classList.remove('texcellent-pdf-sync-highlight');
+      }, 1900);
+    } else {
+      bestPage.wrapper.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    }
+
+    latestCallbacksRef.current.onPageMetricsChange?.({
+      currentPage: bestPage.pageNum,
+      pageCount: pageEntriesRef.current.length,
+    });
+
+    return () => {
+      if (highlightTimer) window.clearTimeout(highlightTimer);
+    };
   }, [forwardSyncRequest]);
 
   // Highlight search matches across TextLayer spans
@@ -598,30 +666,83 @@ export const PdfBinaryCanvasViewer: React.FC<PdfBinaryCanvasViewerProps> = ({
     }
   }, [searchQuery, hasPages, pageCount]);
 
-  // Inverse Sync: Ctrl/Cmd+Click or Double-Click PDF text -> jump to matching LaTeX source line
+  // Extract clicked word right under the pointer so Inverse Sync jumps to the exact word/column
+  const extractClickedWordAtPoint = (
+    clientX: number,
+    clientY: number,
+    fallbackText: string
+  ): string => {
+    try {
+      let node: Node | null = null;
+      let offset = 0;
+      const docAny = document as unknown as {
+        caretPositionFromPoint?: (x: number, y: number) => { offsetNode: Node; offset: number } | null;
+        caretRangeFromPoint?: (x: number, y: number) => Range | null;
+      };
+      if (typeof docAny.caretPositionFromPoint === 'function') {
+        const pos = docAny.caretPositionFromPoint(clientX, clientY);
+        if (pos) {
+          node = pos.offsetNode;
+          offset = pos.offset;
+        }
+      } else if (typeof docAny.caretRangeFromPoint === 'function') {
+        const range = docAny.caretRangeFromPoint(clientX, clientY);
+        if (range) {
+          node = range.startContainer;
+          offset = range.startOffset;
+        }
+      }
+      if (node && node.nodeType === Node.TEXT_NODE) {
+        const str = node.textContent || '';
+        const idx = Math.max(0, Math.min(str.length - 1, offset));
+        let start = idx;
+        let end = idx;
+        while (start > 0 && !/\s/.test(str[start - 1])) start--;
+        while (end < str.length && !/\s/.test(str[end])) end++;
+        const word = str.slice(start, end).trim();
+        if (word.length >= 2) return word;
+      }
+    } catch {
+      // fall through cleanly
+    }
+    return fallbackText.trim();
+  };
+
+  // Inverse Sync: click (without drag selection), double-click, or Ctrl/Cmd+Click PDF text -> jump to exact source position
   const handleContainerInteraction = (e: React.MouseEvent<HTMLDivElement>, isDoubleClick: boolean) => {
     if (!onInverseSync) return;
-    if (!isDoubleClick && !(e.ctrlKey || e.metaKey)) return;
 
     const target = e.target as HTMLElement | null;
     const textLayer = target?.closest('.textLayer');
     if (!textLayer) return;
 
     const selectionText = window.getSelection()?.toString().trim() || '';
-    const spanText = target?.tagName === 'SPAN' ? (target.textContent || '').trim() : '';
+    // Allow drag-to-select/copy on single click without unintentionally jumping
+    if (!isDoubleClick && !(e.ctrlKey || e.metaKey) && selectionText.length > 0) {
+      return;
+    }
+
+    const spanEl = target?.closest('span');
+    const spanText = (spanEl?.textContent || '').trim();
+    if (!spanText && selectionText.length < 2) return;
+
+    const clickedWord =
+      selectionText.length >= 2 && selectionText.length <= 40
+        ? selectionText
+        : extractClickedWordAtPoint(e.clientX, e.clientY, spanText);
 
     let snippet = selectionText.length >= 3 ? selectionText : spanText;
-    if (snippet.length < 14 && target?.tagName === 'SPAN') {
+    if (snippet.length < 18 && spanEl) {
       const siblingTexts: string[] = [];
-      let prev = target.previousElementSibling;
+      let prev = spanEl.previousElementSibling;
       let count = 0;
       while (prev && count < 2) {
         if (prev.textContent?.trim()) siblingTexts.unshift(prev.textContent.trim());
         prev = prev.previousElementSibling;
         count++;
       }
-      siblingTexts.push(snippet);
-      let next = target.nextElementSibling;
+      if (snippet) siblingTexts.push(snippet);
+      let next = spanEl.nextElementSibling;
       count = 0;
       while (next && count < 2) {
         if (next.textContent?.trim()) siblingTexts.push(next.textContent.trim());
@@ -632,7 +753,7 @@ export const PdfBinaryCanvasViewer: React.FC<PdfBinaryCanvasViewerProps> = ({
     }
 
     if (snippet.length >= 2) {
-      onInverseSync(snippet);
+      onInverseSync(snippet, clickedWord);
     }
   };
 
